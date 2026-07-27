@@ -253,6 +253,8 @@ $('tShareMulti').onclick = async () => {
 
 // --- real photo upload ---------------------------------------------------
 
+const seenHashes = new Map();   // hash -> first filename, this session
+
 $('photo').onchange = async (e) => {
   for (const f of e.target.files) {
     try {
@@ -260,6 +262,15 @@ $('photo').onchange = async (e) => {
       const buf = await f.arrayBuffer();
       const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', buf))]
         .slice(0, 4).map((b) => b.toString(16).padStart(2, '0')).join('');
+
+      // Content-hash dedup only works if the picker hands back identical bytes
+      // for the same library item. Report it so that is observable, not assumed.
+      log(`   ${f.name}: ${f.size} B, sha256[0:4]=${hash}`, 'dim');
+      if (seenHashes.has(hash)) {
+        ok(`DEDUP HIT — same bytes as "${seenHashes.get(hash)}"; upload skipped`);
+        continue;
+      }
+      seenHashes.set(hash, f.name);
 
       let thumbNote = 'no thumbnail';
       try {
