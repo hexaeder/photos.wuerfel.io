@@ -1,0 +1,11 @@
+# Local config — holds 1Password references, not secrets, but still local-only.
+config.toml
+photoshare.toml
+
+# Generated from config by `photoshare.py admin-policy`
+admin-policy.json
+
+__pycache__/
+*.py[cod]
+.venv/
+.DS_Store

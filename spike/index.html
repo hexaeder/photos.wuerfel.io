@@ -1,0 +1,248 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Photoshare — Phase 0 spike</title>
+
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font: 15px/1.5 system-ui, sans-serif;
+    max-width: 46rem; margin: 0 auto; padding: 1rem 1rem 4rem;
+  }
+  h1 { font-size: 1.2rem; }
+  input, button, textarea { font: inherit; }
+  textarea { width: 100%; height: 4.5rem; box-sizing: border-box; }
+  button { padding: .5rem .8rem; margin: .15rem .15rem .15rem 0; }
+  button:disabled { opacity: .4; }
+  #log {
+    background: #0002; padding: .6rem; border-radius: 6px;
+    font: 12px/1.45 ui-monospace, monospace; white-space: pre-wrap;
+    word-break: break-word; max-height: 22rem; overflow-y: auto;
+  }
+  .ok   { color: #16803c; font-weight: 600; }
+  .bad  { color: #b32020; font-weight: 600; }
+  .dim  { opacity: .65; }
+  @media (prefers-color-scheme: dark) {
+    .ok { color: #4ade80; } .bad { color: #f87171; }
+  }
+  #gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(90px, 1fr)); gap: 6px; }
+  #gallery img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 4px; }
+  fieldset { border: 1px solid #8884; border-radius: 6px; margin: 1rem 0; }
+</style>
+
+<h1>Photoshare — Phase 0 spike</h1>
+<p class="dim">
+  Proves the browser half end-to-end: SigV4 signing, CORS, list, upload,
+  presigned <code>&lt;img&gt;</code>, and Web Share. Not the real app.
+</p>
+
+<fieldset>
+  <legend>Album link</legend>
+  <textarea id="link" placeholder="Paste the https://photos.wuerfel.io/#a=... link here"></textarea>
+  <button id="load">Load</button>
+  <span id="albumName" class="dim"></span>
+</fieldset>
+
+<fieldset>
+  <legend>Tests</legend>
+  <button id="tList" disabled>1. List objects</button>
+  <button id="tPut" disabled>2. Upload a text file</button>
+  <button id="tImg" disabled>3. Presigned &lt;img&gt;</button>
+  <button id="tShare" disabled>4. Web Share (phone)</button>
+  <br>
+  <label>Real photo upload: <input type="file" id="photo" accept="image/*" multiple disabled></label>
+</fieldset>
+
+<div id="gallery"></div>
+
+<fieldset>
+  <legend>Log</legend>
+  <div id="log"></div>
+</fieldset>
+
+<script type="module">
+import { AwsClient } from './lib/aws4fetch.js';
+
+const $ = (id) => document.getElementById(id);
+const logEl = $('log');
+
+function log(msg, cls = '') {
+  const t = new Date().toISOString().slice(11, 19);
+  logEl.insertAdjacentHTML('beforeend',
+    `<div class="${cls}">${t}  ${String(msg).replace(/</g, '&lt;')}</div>`);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+const ok = (m) => log('PASS  ' + m, 'ok');
+const bad = (m) => log('FAIL  ' + m, 'bad');
+
+// --- album link ----------------------------------------------------------
+
+function decodeAlbum(fragment) {
+  const b64 = fragment.replace(/-/g, '+').replace(/_/g, '/');
+  return JSON.parse(atob(b64 + '='.repeat((4 - b64.length % 4) % 4)));
+}
+
+let A = null;    // album descriptor
+let aws = null;  // signer
+
+function loadAlbum(raw) {
+  const m = raw.trim().match(/#a=([\w\-]+)/);
+  if (!m) { bad('no #a=... found in that link'); return; }
+  try {
+    A = decodeAlbum(m[1]);
+  } catch (e) { bad('could not decode link: ' + e.message); return; }
+
+  aws = new AwsClient({
+    accessKeyId: A.k, secretAccessKey: A.s, region: A.rg, service: 's3',
+  });
+  $('albumName').textContent = `${A.n} — ${A.b}/${A.p} @ ${A.rg}`;
+  for (const id of ['tList', 'tPut', 'tImg', 'tShare', 'photo']) $(id).disabled = false;
+  log(`loaded album "${A.n}"  bucket=${A.b}  prefix=${A.p}`);
+  log(`secure context: ${window.isSecureContext}, crypto.subtle: ${!!crypto.subtle}`);
+  if (!window.isSecureContext) {
+    bad('not a secure context — crypto.subtle and share will fail. Use http://localhost or https.');
+  }
+}
+
+const url = (key) => `${A.ep}/${A.b}/${A.p}${key}`;
+
+// --- 1. list -------------------------------------------------------------
+
+async function list(subdir = '') {
+  const u = new URL(`${A.ep}/${A.b}`);
+  u.searchParams.set('list-type', '2');
+  u.searchParams.set('prefix', A.p + subdir);   // required by the IAM policy
+
+  const res = await aws.fetch(u);
+  if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
+
+  const xml = new DOMParser().parseFromString(await res.text(), 'text/xml');
+  const tag = (el, n) => el.getElementsByTagNameNS('*', n)[0]?.textContent;
+  return [...xml.getElementsByTagNameNS('*', 'Contents')].map((c) => ({
+    key: tag(c, 'Key'),
+    path: tag(c, 'Key').slice(A.p.length),
+    size: +tag(c, 'Size'),
+    etag: tag(c, 'ETag')?.replace(/"/g, ''),
+  }));
+}
+
+$('tList').onclick = async () => {
+  try {
+    const items = await list();
+    ok(`list returned ${items.length} object(s) — signing + CORS work`);
+    for (const i of items.slice(0, 20)) log(`   ${i.path}  ${i.size} B`, 'dim');
+  } catch (e) { bad('list: ' + e.message); }
+};
+
+// --- 2. upload -----------------------------------------------------------
+
+async function put(key, blob, type) {
+  const res = await aws.fetch(url(key), {
+    method: 'PUT', body: blob, headers: type ? { 'Content-Type': type } : {},
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  return res.headers.get('ETag');
+}
+
+$('tPut').onclick = async () => {
+  const key = `spike/hello-${Date.now()}.txt`;
+  try {
+    const etag = await put(key, new Blob([`written ${new Date()}`]), 'text/plain');
+    ok(`PUT ${key} — preflight + upload work (ETag ${etag})`);
+    log('   ETag readable from JS => Access-Control-Expose-Headers works', 'dim');
+  } catch (e) { bad('PUT: ' + e.message); }
+};
+
+// --- 3. presigned <img> --------------------------------------------------
+
+async function presign(key, seconds = 3600) {
+  const signed = await aws.sign(`${url(key)}?X-Amz-Expires=${seconds}`, {
+    method: 'GET', aws: { signQuery: true },
+  });
+  return signed.url;
+}
+
+$('tImg').onclick = async () => {
+  try {
+    // A 1x1 red PNG, so there is definitely an image to render.
+    const png = Uint8Array.from(atob(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+    ), (c) => c.charCodeAt(0));
+    const key = 'spike/pixel.png';
+    await put(key, new Blob([png], { type: 'image/png' }), 'image/png');
+
+    const src = await presign(key);
+    const img = new Image();
+    img.onload = () => ok('presigned <img> rendered — no CORS needed for display');
+    img.onerror = () => bad('presigned <img> failed to load');
+    img.src = src;
+    $('gallery').replaceChildren(img);
+    log('   ' + src.slice(0, 110) + '…', 'dim');
+  } catch (e) { bad('presign: ' + e.message); }
+};
+
+// --- 4. web share (the iOS unknown) --------------------------------------
+
+$('tShare').onclick = async () => {
+  if (!navigator.share) { bad('navigator.share unavailable (desktop browser?)'); return; }
+
+  // Fetch FIRST, share on a later tap: awaiting inside the gesture breaks iOS.
+  log('preparing file…');
+  let file;
+  try {
+    const png = await (await fetch(await presign('spike/pixel.png'))).blob();
+    file = new File([png], 'photoshare-test.png', { type: 'image/png' });
+  } catch (e) { bad('could not fetch the test image: ' + e.message); return; }
+
+  if (!navigator.canShare?.({ files: [file] })) {
+    bad('canShare({files}) is false — file sharing unsupported here');
+    return;
+  }
+  const btn = document.createElement('button');
+  btn.textContent = 'Tap to share (look for "Save Image")';
+  btn.onclick = () => navigator.share({ files: [file] })
+    .then(() => ok('share sheet completed — did you see "Save Image"?'))
+    .catch((e) => bad('share: ' + e.name + ' ' + e.message));
+  $('tShare').after(btn);
+  log('button added — tap it. A second tap is required on iOS.', 'dim');
+};
+
+// --- real photo upload ---------------------------------------------------
+
+$('photo').onchange = async (e) => {
+  for (const f of e.target.files) {
+    try {
+      const t0 = performance.now();
+      const buf = await f.arrayBuffer();
+      const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', buf))]
+        .slice(0, 4).map((b) => b.toString(16).padStart(2, '0')).join('');
+
+      let thumbNote = 'no thumbnail';
+      try {
+        const bmp = await createImageBitmap(f);
+        const scale = Math.min(1, 512 / Math.max(bmp.width, bmp.height));
+        const cv = new OffscreenCanvas(bmp.width * scale | 0, bmp.height * scale | 0);
+        cv.getContext('2d').drawImage(bmp, 0, 0, cv.width, cv.height);
+        const thumb = await cv.convertToBlob({ type: 'image/jpeg', quality: 0.7 });
+        await put(`spike/thumb-${hash}.jpg`, thumb, 'image/jpeg');
+        thumbNote = `thumb ${cv.width}x${cv.height} ${(thumb.size / 1024) | 0} KB`;
+        bmp.close();
+      } catch (err) { thumbNote = 'thumbnail failed: ' + err.message; }
+
+      await put(`spike/photo-${hash}.jpg`, f, f.type || 'image/jpeg');
+      ok(`${f.name} (${(f.size / 1024 / 1024).toFixed(1)} MB) uploaded in ` +
+         `${((performance.now() - t0) / 1000).toFixed(1)}s — ${thumbNote}`);
+    } catch (err) { bad(`${f.name}: ${err.message}`); }
+  }
+  log('re-run test 1 to see them listed', 'dim');
+};
+
+// --- boot ----------------------------------------------------------------
+
+$('load').onclick = () => loadAlbum($('link').value);
+if (location.hash.includes('#a=')) {
+  $('link').value = location.href;
+  loadAlbum(location.href);
+} else {
+  log('paste an album link above, then press Load', 'dim');
+}
+</script>
