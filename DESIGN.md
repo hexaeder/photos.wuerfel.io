@@ -7,7 +7,7 @@ a scoped Wasabi admin key from 1Password.
 
 **Status:** CLI implemented and live against `photoshare-wuerfel`
 (`eu-central-2`); security model verified on hardware (§2.2). Web app not
-started — see §10 Phase 0.
+started — Phase 0 de-risking complete (§10).
 
 ---
 
@@ -30,9 +30,10 @@ this idea.
 | Per-user "already downloaded" state, stored in the bucket | ✅ Yes |
 | "What's new since my last visit" | ✅ Yes |
 | Download all / sync | ✅ Yes |
-| Save directly into the phone's photo gallery | ⚠️ Reliable on Android, unreliable on iOS (§8.5) |
+| Save directly into the phone's photo gallery | ✅ Verified on iOS and Android (§7.5) |
 
-Exactly one ⚠️ remains, and it has a decent manual fallback.
+No open feasibility questions remain — every row above was measured against the
+live account and a real iPhone during Phase 0 (§10), not inferred.
 
 ### 1.1 The CORS blocker is gone
 
@@ -109,8 +110,8 @@ every axis except one:
 | Revoke one album | delete + recreate the share | `photoshare revoke <slug>`, instant |
 | Revoke without breaking other albums | n/a | ✅ |
 | Can reach other albums / other data | folder only | prefix only, enforced by IAM |
-| Can delete files | yes | yes (unless view-only link) |
-| Recoverable after a delete | no | ✅ bucket versioning |
+| Can delete files | yes | only until `--expires` lapses |
+| Recoverable after a delete | no | only with versioning — **off** on this bucket |
 | Credential visible in URL | token | access key + secret |
 
 The last row is the one downside, and it's cosmetic rather than substantive: a
@@ -130,9 +131,12 @@ Practical rules that follow:
 - **Issue view-only links for people who only want to look**
   (`create --readonly-link`). Costs one extra IAM user and removes delete risk
   for most of the group.
-- **Enable versioning** (`photoshare init` does). It turns a malicious or
-  fat-fingered mass delete into an undo, and given the 90-day minimum billing
-  you're paying for the deleted bytes anyway.
+- **Versioning is currently off** on `photoshare-wuerfel`, by choice. That means
+  a delete is final. It's a defensible call because `DeleteObject` sits in the
+  same expiring statement as `PutObject`, so the window in which anyone *can*
+  delete is the same 30 days as the upload window. If you ever want the undo,
+  enable it in the console — given the 90-day minimum you're paying for the
+  deleted bytes regardless.
 - **Per-user sync state is readable by everyone in the album** — it lives in the
   shared prefix. "Hans downloaded 47 photos" is visible to the group.
 - **Consider stripping GPS EXIF on upload** (§8.1). Photos carry home addresses.
@@ -649,6 +653,17 @@ deduplication: re-uploading the same photo produces the same key and overwrites
 rather than duplicating. This matters more than it sounds — people re-pick the
 same photos constantly.
 
+> **Verified on iOS, 2026-07-27.** The same camera photo picked three times in
+> separate picker sessions produced one object, not three — so Safari's
+> HEIC→JPEG transcode is byte-for-byte deterministic and the hash is stable
+> across picks. This was the load-bearing assumption; without it dedup would
+> have had to fall back to EXIF `DateTimeOriginal` + dimensions.
+>
+> The one case that does **not** dedup: an image saved out of the share sheet
+> and re-picked. iOS re-encodes on save, so the library item is genuinely a
+> different file. Correct behaviour, but worth knowing before someone reports it
+> as a bug.
+
 ### 5.2 The album link
 
 ```
@@ -793,8 +808,14 @@ Per file:
 2. **Decode** via `createImageBitmap(file)` (handles EXIF orientation). iOS
    usually transcodes HEIC→JPEG on pick, but not always; if this throws, upload
    the original without a thumbnail rather than failing the upload.
-3. **Thumbnail**: `OffscreenCanvas` at max 512px, `toBlob('image/jpeg', 0.7)` →
-   ~40 KB. Directly load-bearing for the egress ratio (§3).
+3. **Thumbnail**: `OffscreenCanvas` at max 512px, `toBlob('image/jpeg', 0.7)`.
+   Directly load-bearing for the egress ratio (§3).
+
+   > **Measured, not estimated:** real iPhone photos yield **~85 KB** at
+   > 384×512 q0.7 — roughly double the 40 KB this section originally assumed.
+   > Detailed photographs compress far worse than synthetic test images. If
+   > gallery load matters, 384px at q0.6 gets closer to 40 KB; at ~1000 photos
+   > that's 85 MB vs 40 MB per full browse.
 4. Optionally **downscale the original** (a 4000px cap is invisible on phones,
    ~4× smaller). Toggle, default on.
 5. Optionally **strip GPS EXIF** — canvas re-encoding does this as a side
@@ -998,10 +1019,23 @@ tools/photoshare.py
 
 ## 10. Roadmap
 
-**Phase 0 — de-risk (~1 hour).** One HTML file, one hardcoded album link, one
-list + one PUT via `aws4fetch`. Confirms signing and CORS end-to-end. Then, on a
-real iPhone, check whether `navigator.share({files})` offers "Save to Photos"
-(§7.5) — the only remaining unknown.
+**Phase 0 — de-risk. ✅ COMPLETE (2026-07-27).** See `spike/index.html` for the
+working patterns. Every unknown resolved on real hardware:
+
+| Unknown | Result |
+|---|---|
+| CORS without configuration | ✅ works, zero setup |
+| SigV4 signing in-browser (`aws4fetch`) | ✅ list + PUT |
+| `ETag` readable from JS | ✅ `Expose-Headers: *` |
+| Presigned `<img>` display | ✅ no CORS involved |
+| Per-album IAM isolation (3 fences) | ✅ §2.2 |
+| Upload expiry enforced | ✅ §2.3 |
+| HEIC handling | ✅ Safari transcodes to JPEG on pick |
+| Content-hash dedup across picks | ✅ §5.1 |
+| **iOS save-to-photo-library** | ✅ single **and** 3-file batch |
+
+A 3.3 MB photo uploaded from an iPhone in 0.8 s including on-device
+thumbnailing. Nothing in this design is speculative any more.
 
 **Phase 1 — MVP.** Fragment parsing, S3 adapter, identity, upload with
 thumbnails, gallery grid, lightbox. Already replaces the shared-folder workflow.
