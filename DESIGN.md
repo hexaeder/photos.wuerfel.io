@@ -678,17 +678,30 @@ https://photos.wuerfel.io/#a=<base64url(JSON)>
   "b":  "photoshare-wuerfel",
   "p":  "albums/norway-2026/",
   "k":  "ACCESSKEY", "s": "secret",
-  "n":  "Norway 2026"
+  "n":  "Norway 2026",
+  "ro": 1
 }
 ```
 
-```js
-const decodeAlbum = (s) =>
-  JSON.parse(atob(s.replace(/-/g, '+').replace(/_/g, '/')));
-```
+`ro` is present only on view-only links (`--readonly-link`, `link --readonly`).
+It lets the app hide the upload and delete controls up front rather than
+letting people discover the restriction by hitting a 403. The IAM policy is
+still what enforces it — the flag only saves a wasted tap, so a link with a
+forged `ro: 0` gains nothing.
 
 Base64url is required, not cosmetic: Wasabi secrets routinely contain `/` and
-`+`, which would corrupt a plain-base64 fragment.
+`+`, which would corrupt a plain-base64 fragment. Decode through `TextDecoder`
+rather than trusting `atob`'s byte-per-char output, so album titles with
+umlauts survive:
+
+```js
+const decodeAlbum = (s) => {
+  const b64 = s.replace(/-/g, '+').replace(/_/g, '/');
+  const bin = atob(b64 + '='.repeat((4 - b64.length % 4) % 4));
+  return JSON.parse(new TextDecoder().decode(
+    Uint8Array.from(bin, (c) => c.charCodeAt(0))));
+};
+```
 
 ---
 
@@ -836,28 +849,54 @@ whether done/not-done is enough.)
 
 ### 7.2 Gallery
 
-CSS grid of thumbnails via presigned `urlFor()` URLs in `<img loading="lazy">`,
-sorted by the timestamp in the filename, newest first. Presign once per page
-load with a 24h expiry and cache the URLs in memory.
+CSS grid of thumbnails via presigned `urlFor()` URLs, sorted by the timestamp
+in the filename, newest first. Tiles are built once and filtering toggles
+`hidden` — no re-render, and it stays smooth at a thousand photos.
 
-Each tile shows the uploader's display name (from `users/<uid>.json`, falling
-back to the uid) and a "new" badge if `uploadedAt > lastSeenAt`. Tap opens a
-lightbox with the full-size image, swipe navigation, and *Save*, *Share*,
-*Delete* (offered only on your own photos — anyone *can* delete anything within
-the album, §2).
+Presigning is **lazy**, driven by an `IntersectionObserver` with a 400 px
+margin. Signing every thumbnail up front would be a thousand HMAC chains before
+the first paint.
+
+**Attribution is carried by colour.** Each person gets a hue that appears on the
+rule under their frames, in their frame numbers, on their filter chip and next
+to their name — so who-shot-what is a glance rather than a label to read.
+Colours come from 24 hues, and the palette is assigned across the album's
+actual members to spread them as far apart as possible: four friends land ~80°
+apart, and nobody is ever placed within 27° of someone else — near-identical is
+worse than identical, because you think you can tell them apart and can't.
+Members are ordered by first upload, which makes assignment append-only, so
+somebody joining on day five never recolours anyone already there. Past the
+point where 27° can be maintained, hues repeat at a darker lightness.
+
+The tile also carries the uploader's **first name** under the frame number.
+Full names go in the chips and the lightbox; at 92 px a full name is all
+ellipsis and no information.
+
+**Marks appear only where there's something to act on** — new and saved get a
+grease-pencil ring, the ordinary middle state stays clean. Saved beats new,
+since it's the terminal state.
+
+Tap opens a lightbox with the full-size image, swipe and arrow navigation, and
+*Save* / *Delete*. Delete is offered only on your own photos: a courtesy fence,
+not security — anyone with the link *can* delete anything (§2).
 
 ### 7.3 Identity
 
-First visit: generate `uid` (6 random hex), pick a random friendly name
-("Wandering Elk"), store `{uid, name}` in `localStorage`, write
-`users/<uid>.json`.
+First visit lands on the identity screen, before the gallery: a name field
+prefilled with a random friendly name ("Wandering Elk") over a 6-hex `uid`,
+stored as `{uid, name}` in `localStorage` and written to `users/<uid>.json`.
 
-UI offers **rename** (rewrites that one file; since names resolve at render
-time, all existing photos re-label instantly) and **"I'm someone else"** — a
-dropdown of all users found in `users/`, which adopts that uid locally.
+Identity is **global, not per-album** — you're the same person on every trip.
 
-That dropdown is not a nicety; it's the recovery path for §9.1. Make it easy to
-find.
+Underneath the name field sits **"or continue as"**: every user found in
+`users/`, each in their own colour, one tap to adopt. That list is not a
+nicety, it's the recovery path for §8.1, so it gets real estate on the first
+screen rather than a settings submenu. It also makes testing with several
+identities trivial.
+
+The header's identity chip reopens the same screen, which is where **rename**
+lives too — it rewrites that one file, and since names resolve at render time
+every existing photo relabels instantly.
 
 ### 7.4 Sync state
 
@@ -986,20 +1025,33 @@ Given limited JS experience: **no build step, no framework.**
   Hashing, resizing, and sharing are native browser APIs. Vendor both as single
   files rather than trusting a CDN to stay up.
 
+As built:
+
 ```
-index.html
-app.js              entry: parse fragment, wire up UI
-state.js            in-memory album state + render()
-identity.js         uid/name, localStorage
-sync.js             list/diff/seen-state
-upload.js           hash, thumbnail, put
-download.js         share / zip
-backends/s3.js
-lib/aws4fetch.js
-lib/fflate.min.js
-manifest.json  sw.js
+index.html          shell: link / identity / gallery screens, lightbox, sheets
+app.css             all styles; the token block is at the top
+js/app.js           boot, screen routing, bulk save, error messages
+js/album.js         decode #a=, validate, `ro` flag
+js/backend-s3.js    list / get / put / remove / getJSON / putJSON / urlFor
+js/photos.js        filename → record, frame numbers, hash set
+js/identity.js      uid + name, localStorage, users/, colour-from-uid
+js/seen.js          state/<uid>.json, lastSeenAt, downloaded, union merge
+js/gallery.js       tiles, filter, marks, lazy presigning
+js/lightbox.js      full-size viewer, nav, save, delete-own
+js/upload.js        hash → thumbnail → put, with a progress sheet
+js/share.js         canShare branch, batching, desktop fallback
+js/ui.js            el / toast / confirm sheet / task sheet
+lib/aws4fetch.js    vendored, MIT
 tools/photoshare.py
+spike/              Phase 0, kept as the reference for the proven patterns
 ```
+
+Still to come (Phase 3): `manifest.json` + `sw.js` for PWA install and the
+Android share target.
+
+**No ZIP dependency.** `fflate` would have been the only third-party addition
+beyond the signer, and only for desktop bulk download; sequential `<a download>`
+clicks get there with one familiar Chrome prompt instead.
 
 ### 9.1 JS notes coming from another language
 
@@ -1037,15 +1089,21 @@ working patterns. Every unknown resolved on real hardware:
 A 3.3 MB photo uploaded from an iPhone in 0.8 s including on-device
 thumbnailing. Nothing in this design is speculative any more.
 
-**Phase 1 — MVP.** Fragment parsing, S3 adapter, identity, upload with
-thumbnails, gallery grid, lightbox. Already replaces the shared-folder workflow.
+**Phase 1 + 2 — the whole loop. Built.** Fragment parsing, S3 adapter, identity
+with the "continue as" recovery list, upload with thumbnails and dedup, gallery
+grid with per-person colours and filtering, lightbox, `state/<uid>.json`,
+new/saved marks, save-all via `navigator.share`, desktop download fallback,
+delete-your-own, progress and retry, view-only handling. See §7 and §9.
 
-**Phase 2 — the value-add.** `state/<uid>.json`, "new since last visit",
-download-all-new via `navigator.share`, desktop ZIP, identity dropdown.
+Two things Phase 1 settled that the plan had left open:
+
+- **Bulk download on desktop is plain sequential downloads**, not a ZIP. See §9.
+- **The `ro` flag** (§5.2) resolved open question 3 — the app hides write UI
+  when the link says so, and still handles a 403 gracefully either way, which
+  also covers a link whose `--expires` window has lapsed.
 
 **Phase 3 — polish.** PWA manifest + service worker + Android share target,
-delete-own-photo, progress/retry UI, view-only link handling (hide upload UI
-when the key can't write).
+per-file upload progress bars (needs `XMLHttpRequest`, §7.1), album cover.
 
 **Phase 4 — optional.** Videos, captions, EXIF date extraction, album cover.
 
@@ -1053,14 +1111,20 @@ when the key can't write).
 
 ## 11. Open questions
 
-1. **Originals or downscaled by default?** Affects upload time on hotel wifi.
+1. ~~**Originals or downscaled by default?**~~ **Settled: originals, with a
+   toggle** in the upload sheet (`photoshare.fullsize` in `localStorage`).
+   Storage is cheap and the point of the album is your friends' real photos;
+   thumbnails already carry the browsing cost. Turning it off caps the long
+   edge at 4000 px, which is invisible on a phone and roughly 4× smaller.
 2. **Do videos matter?** Large extra scope: thumbnailing, size, no client-side
-   transcode.
-3. **Should the app detect a read-only key** and hide upload UI, or just let the
-   PUT fail with a message? Detecting cleanly means a probe request; failing
-   loudly is simpler.
+   transcode. Still open.
+3. ~~**Should the app detect a read-only key?**~~ **Settled: both.** The `ro`
+   flag in the link (§5.2) hides the write UI with no probe request, and a 403
+   on write is still handled with a specific message — which is what covers a
+   writable link whose `--expires` window has since lapsed.
 4. **One album per link, or a "my albums" list in `localStorage`?** The latter
-   is pleasant but resets on iOS (§8.1).
+   is pleasant but resets on iOS (§8.1). Still open — identity is already
+   global across albums, so the list is the only missing piece.
 
 ---
 

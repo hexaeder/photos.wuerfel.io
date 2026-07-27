@@ -1,0 +1,332 @@
+import { $, el, show, toast, taskSheet, plural } from './ui.js';
+import { albumFromLocation, albumFromText } from './album.js';
+import { s3Backend } from './backend-s3.js';
+import { parsePhotos, hashesOf, frameNo } from './photos.js';
+import {
+  loadMe, saveMe, newUid, randomName, colorFor, setPalette,
+  loadUsers, writeUser, nameOf,
+} from './identity.js';
+import { createSeen } from './seen.js';
+import { createGallery } from './gallery.js';
+import { createLightbox } from './lightbox.js';
+import { createUploader } from './upload.js';
+import { canShareFiles, fetchFiles, chunk, shareFiles, downloadFiles, BATCH } from './share.js';
+
+/** Shared state. The lightbox reads me/users through this, so a rename or an
+    identity switch reaches it without rewiring anything. */
+const ctx = { me: null, users: new Map() };
+
+let album = null;
+let backend = null;
+let recs = [];
+let existing = new Set();
+let seen = null;
+let gallery = null;
+let lightbox = null;
+let uploader = null;
+
+// ── error messages that say what to do ───────────────────────────────────
+
+function explain(e) {
+  if (e.code === 'RequestTimeTooSkewed') {
+    return "The storage rejected this request because the clock on this device is wrong. Fix the date and time, then reload.";
+  }
+  if (e.code === 'SignatureDoesNotMatch') {
+    return "The link's key was rejected. Either the link got mangled in transit, or this device's clock is badly wrong.";
+  }
+  if (e.status === 403) {
+    return 'This link no longer works — it has been revoked or has expired. Ask whoever shared it for a new one.';
+  }
+  if (e.status === 404) return 'That album is gone.';
+  if (e instanceof TypeError) {
+    return 'Could not reach the storage. Check your connection and try again.';
+  }
+  return e.message;
+}
+
+function showLink(message) {
+  if (message) {
+    $('linkErr').textContent = message;
+    $('linkErr').hidden = false;
+  }
+  show('link');
+}
+
+// ── the overflow guard the spike needed ──────────────────────────────────
+// The spike scrolled sideways on an iPhone mini and nobody noticed until it
+// was on a phone. This warns in the console the moment it happens again.
+
+function checkOverflow() {
+  const d = document.documentElement;
+  if (d.scrollWidth > d.clientWidth + 1) {
+    console.warn('[photoshare] horizontal overflow — page is %dpx wide in a %dpx viewport',
+                 d.scrollWidth, d.clientWidth);
+  }
+}
+
+// ── identity ─────────────────────────────────────────────────────────────
+
+/**
+ * Everyone the album knows about — including uids that only appear in
+ * filenames, so someone whose users/ entry is missing still gets a colour.
+ *
+ * Ordered by first upload, because setPalette treats the order as join order:
+ * appending a newcomer then leaves everyone else's colour alone.
+ */
+function repalette() {
+  const firstSeen = new Map();
+  for (let i = recs.length - 1; i >= 0; i--) {       // recs is newest-first
+    if (!firstSeen.has(recs[i].uid)) firstSeen.set(recs[i].uid, recs[i].ts);
+  }
+  const all = new Set([...firstSeen.keys(), ...ctx.users.keys(), ctx.me?.uid].filter(Boolean));
+  setPalette([...all].sort((a, b) =>
+    (firstSeen.get(a) ?? Infinity) - (firstSeen.get(b) ?? Infinity) || a.localeCompare(b)));
+}
+
+function openIdentity({ returning = false } = {}) {
+  const candidate = ctx.me ?? { uid: newUid(), name: randomName() };
+
+  $('identAlbum').textContent = album.n;
+  $('nameInput').value = candidate.name;
+  $('identSwatch').style.setProperty('--person', colorFor(candidate.uid));
+  $('identGo').textContent = returning ? 'Save' : 'Start';
+  $('identCancel').hidden = !returning;
+
+  const others = [...ctx.users.values()].filter((u) => u.uid !== candidate.uid);
+  $('identKnown').hidden = others.length === 0;
+  $('identList').replaceChildren(...others
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((u) => {
+      const b = el('button', {
+        class: 'knownbtn',
+        type: 'button',
+        onclick: () => start({ uid: u.uid, name: u.name }),
+      }, el('span', { class: 'swatch' }), el('span', { text: u.name }));
+      b.style.setProperty('--person', colorFor(u.uid));
+      return b;
+    }));
+
+  $('identGo').onclick = () => {
+    const name = $('nameInput').value.trim() || candidate.name;
+    start({ uid: candidate.uid, name });
+  };
+  $('nameInput').onkeydown = (e) => { if (e.key === 'Enter') $('identGo').click(); };
+  $('identCancel').onclick = () => show('gallery');
+
+  show('identity');
+}
+
+async function start(me) {
+  const renamed = ctx.users.get(me.uid)?.name !== me.name;
+  const switched = ctx.me && ctx.me.uid !== me.uid;
+
+  ctx.me = saveMe(me);
+  ctx.users.set(me.uid, { uid: me.uid, name: me.name });
+  repalette();
+
+  if (renamed && !album.readonly) {
+    // Names resolve at render time, so every existing photo relabels itself.
+    writeUser(backend, me).catch(() => {
+      toast('Saved on this device, but the album could not be updated.', 'bad');
+    });
+  }
+
+  $('whoName').textContent = me.name;
+  $('whoSwatch').style.setProperty('--person', colorFor(me.uid));
+
+  // Seen state belongs to the person, so switching identity reloads it.
+  if (!seen || switched) {
+    seen = createSeen(backend, `${album.b}/${album.p}`, me.uid);
+    await seen.load();
+  }
+
+  if (gallery && !switched) {
+    // A rename changes labels, nothing else. Rebuilding the grid would drop
+    // every loaded thumbnail and re-sign every URL for a typo fix.
+    gallery.relabel(ctx.users);
+    gallery.refresh();
+  } else {
+    buildGallery();
+  }
+
+  show('gallery');
+  checkOverflow();
+
+  // Advance lastSeenAt only once the gallery has actually been looked at — on
+  // every page load and "new" would stop meaning anything.
+  setTimeout(() => seen.touch(), 4000);
+}
+
+// ── gallery ──────────────────────────────────────────────────────────────
+
+function buildGallery() {
+  if (!gallery) {
+    gallery = createGallery({
+      backend,
+      seen: { isNew: (r, me) => seen.isNew(r, me), isSaved: (r) => seen.isSaved(r) },
+      onOpen: (rec) => lightbox.open(gallery.visible(), rec),
+    });
+
+    lightbox = createLightbox({
+      backend, album, ctx,
+      seen: { markSaved: (r) => seen.markSaved(r) },
+      onSaved: () => gallery.refresh(),
+      onDeleted: (rec) => {
+        recs = recs.filter((r) => r.base !== rec.base);
+        existing.delete(rec.hash);
+        recs.slice().reverse().forEach((r, i) => { r.num = i + 1; });
+        gallery.remove(rec.base);
+      },
+    });
+
+    uploader = createUploader({
+      backend, album, ctx, existing,
+      onUploaded: (rec) => {
+        recs.unshift(rec);
+        recs.slice().reverse().forEach((r, i) => { r.num = i + 1; });
+        gallery.add(rec);
+      },
+    });
+
+    $('addBtn').onclick = () => uploader.pick();
+    $('saveAllBtn').onclick = saveAll;
+    $('whoBtn').onclick = () => openIdentity({ returning: true });
+    $('upClose').onclick = () => taskSheet.close();
+  }
+
+  $('galTitle').textContent = album.n;
+  $('addBtn').hidden = album.readonly;
+  gallery.render(recs, ctx.users, ctx.me);
+}
+
+// ── bulk save ────────────────────────────────────────────────────────────
+
+async function saveAll() {
+  const list = gallery.pending();
+  if (!list.length) return;
+
+  taskSheet.open({
+    title: canShareFiles() ? 'Saving to your photos' : 'Downloading',
+    summary: `Fetching ${plural(list.length, 'photo')}…`,
+  });
+
+  const rows = new Map();
+  for (const r of list) {
+    rows.set(r.base, taskSheet.row(`${frameNo(r.num)} · ${nameOf(ctx.users, r.uid)}`));
+  }
+
+  let files;
+  try {
+    files = await fetchFiles(backend, list, album.n, (done, total, rec) => {
+      rows.get(rec.base)?.('done', 'Ready');
+      taskSheet.summary(`Fetched ${done} of ${total}`);
+    });
+  } catch (e) {
+    taskSheet.summary(explain(e)).action('Close', () => taskSheet.close());
+    return;
+  }
+
+  if (!canShareFiles()) {
+    await downloadFiles(files);
+    seen.markSaved(list);
+    gallery.refresh();
+    taskSheet.summary(`${plural(files.length, 'photo')} downloaded.`)
+             .action('Done', () => taskSheet.close());
+    return;
+  }
+
+  // iOS wants a user gesture per share() call, so batches get one tap each.
+  const batches = chunk(files, BATCH);
+  const recBatches = chunk(list, BATCH);
+  let b = 0;
+
+  const offer = () => {
+    const from = b * BATCH + 1;
+    const to = from + batches[b].length - 1;
+    taskSheet.summary(batches.length > 1
+      ? `Ready. Your phone takes them ${BATCH} at a time — pick “Save Images” each time.`
+      : 'Ready. Pick “Save Images” in the sheet that opens.');
+    taskSheet.action(
+      batches.length > 1 ? `Save ${from}–${to} of ${files.length}` : `Save ${plural(files.length, 'photo')}`,
+      async () => {
+        try {
+          await shareFiles(batches[b]);   // nothing awaited first: gesture intact
+        } catch (e) {
+          if (e.name !== 'AbortError') toast(`Could not save: ${e.message}`, 'bad');
+          return;
+        }
+        seen.markSaved(recBatches[b]);
+        gallery.refresh();
+        b++;
+        if (b < batches.length) offer();
+        else {
+          taskSheet.summary('Saved. Check your photo library.')
+                   .action('Done', () => taskSheet.close());
+        }
+      });
+  };
+  offer();
+}
+
+// ── boot ─────────────────────────────────────────────────────────────────
+
+async function openAlbum(a) {
+  album = a;
+  show('boot');
+  $('bootMsg').textContent = `Opening ${album.n}…`;
+
+  if (!window.isSecureContext || !crypto.subtle) {
+    return showLink('This page needs HTTPS to work. Open it over https:// (or http://localhost while developing).');
+  }
+
+  backend = s3Backend(album);
+
+  let entries;
+  try {
+    [entries, ctx.users] = await Promise.all([
+      backend.list('photos/'),
+      loadUsers(backend).catch(() => new Map()),
+    ]);
+  } catch (e) {
+    return showLink(explain(e));
+  }
+
+  recs = parsePhotos(entries);
+  existing = hashesOf(recs);
+  repalette();
+
+  const me = loadMe();
+  if (me) await start(me);
+  else openIdentity();
+}
+
+$('linkGo').onclick = () => {
+  $('linkErr').hidden = true;
+  let a;
+  try {
+    a = albumFromText($('linkInput').value);
+  } catch (e) {
+    return showLink(e.message);
+  }
+  // Put the link in the address bar so a reload keeps working.
+  history.replaceState(null, '', `#a=${/[#&]a=([A-Za-z0-9\-_]+)/.exec($('linkInput').value)[1]}`);
+  openAlbum(a);
+};
+
+addEventListener('resize', checkOverflow);
+
+// Seen-state writes are debounced by 1.5s, and closing a tab mid-debounce
+// would drop them. Phones background a page far more often than they close it,
+// so visibilitychange is the one that actually matters here.
+addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') seen?.flush();
+});
+addEventListener('pagehide', () => seen?.flush());
+
+try {
+  const found = albumFromLocation();
+  if (found) openAlbum(found);
+  else showLink();
+} catch (e) {
+  showLink(e.message);
+}

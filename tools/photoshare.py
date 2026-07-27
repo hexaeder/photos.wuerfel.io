@@ -308,7 +308,9 @@ def policy_expiry(user: str) -> str | None:
     return None
 
 
-def make_link(slug: str, title: str, access_key: str, secret_key: str) -> str:
+def make_link(
+    slug: str, title: str, access_key: str, secret_key: str, readonly: bool = False
+) -> str:
     cfg = config()
     payload = {
         "v": 1,
@@ -321,6 +323,11 @@ def make_link(slug: str, title: str, access_key: str, secret_key: str) -> str:
         "s": secret_key,
         "n": title,
     }
+    # Lets the web app hide the upload and delete controls up front instead of
+    # letting people discover the restriction by hitting a 403. The policy is
+    # still what enforces it; this only saves a wasted tap.
+    if readonly:
+        payload["ro"] = 1
     blob = base64.urlsafe_b64encode(
         json.dumps(payload, separators=(",", ":")).encode()
     ).decode().rstrip("=")
@@ -513,7 +520,7 @@ def cmd_create(args):
 
     if args.readonly_link:
         ro_key, ro_secret = provision_user(slug, readonly=True)
-        print(f"  view-only link:\n  {make_link(slug, title, ro_key, ro_secret)}\n")
+        print(f"  view-only link:\n  {make_link(slug, title, ro_key, ro_secret, readonly=True)}\n")
 
     if args.save:
         subprocess.run(
@@ -536,7 +543,7 @@ def cmd_link(args):
 
     confirm(f"Re-issuing rotates the key and breaks the existing link for {slug!r}. Continue?")
     access_key, secret_key = provision_user(slug, readonly=args.readonly)
-    print(f"\n  {make_link(slug, title, access_key, secret_key)}\n")
+    print(f"\n  {make_link(slug, title, access_key, secret_key, readonly=args.readonly)}\n")
     print("  The previous link is now dead.")
 
 

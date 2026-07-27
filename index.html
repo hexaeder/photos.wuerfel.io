@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#12100E">
+<title>Photoshare</title>
+<link rel="stylesheet" href="app.css">
+
+<body data-screen="boot">
+
+<!-- ── boot ────────────────────────────────────────────────────────────── -->
+<section class="screen" id="scr-boot">
+  <div class="centered">
+    <p class="wordmark">PHOTOSHARE</p>
+    <p class="loading" id="bootMsg">Opening the album…</p>
+  </div>
+</section>
+
+<!-- ── no link, or a broken one ─────────────────────────────────────────── -->
+<section class="screen" id="scr-link">
+  <div class="centered">
+    <p class="wordmark">PHOTOSHARE</p>
+    <h1>Paste your album link</h1>
+    <p class="lede">
+      Someone shared a link that ends in <code>#a=…</code> — paste the whole
+      thing here. The link is the key to the album, so keep it in the group
+      chat rather than anywhere public.
+    </p>
+    <textarea id="linkInput" rows="3" spellcheck="false" autocapitalize="off"
+              autocomplete="off" placeholder="https://photos.wuerfel.io/#a=…"></textarea>
+    <p class="err" id="linkErr" hidden></p>
+    <button class="btn primary wide" id="linkGo">Open album</button>
+  </div>
+</section>
+
+<!-- ── identity ─────────────────────────────────────────────────────────── -->
+<section class="screen" id="scr-identity">
+  <div class="centered">
+    <p class="eyebrow" id="identAlbum"></p>
+    <h1>Who are you?</h1>
+    <p class="lede">
+      Your name goes on the photos you add, so everyone can tell who shot what.
+      Change it whenever you like.
+    </p>
+
+    <div class="namerow">
+      <span class="swatch" id="identSwatch"></span>
+      <input id="nameInput" maxlength="24" autocomplete="off"
+             autocapitalize="words" placeholder="Your name">
+    </div>
+    <button class="btn primary wide" id="identGo">Start</button>
+    <button class="btn ghost wide" id="identCancel" hidden>Cancel</button>
+
+    <div class="known" id="identKnown" hidden>
+      <p class="rule-label">OR CONTINUE AS</p>
+      <div class="knownlist" id="identList"></div>
+      <p class="fineprint">
+        Pick yourself here if this phone forgot you — Safari clears its storage
+        after a week away.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- ── gallery ──────────────────────────────────────────────────────────── -->
+<section class="screen" id="scr-gallery">
+  <header class="sheethead">
+    <div class="headtop">
+      <h1 class="albumtitle" id="galTitle"></h1>
+      <button class="who" id="whoBtn">
+        <span class="swatch" id="whoSwatch"></span>
+        <span class="whoname" id="whoName"></span>
+      </button>
+    </div>
+    <p class="meta" id="galMeta"></p>
+  </header>
+
+  <nav class="filters" id="filters" aria-label="Filter by person"></nav>
+
+  <div class="grid" id="grid"></div>
+
+  <p class="empty" id="galEmpty" hidden>
+    <span class="empty-big">Nothing on the sheet yet.</span>
+    Tap <b>+</b> to add the first photos.
+  </p>
+
+  <footer class="dock">
+    <button class="btn save" id="saveAllBtn" hidden></button>
+    <button class="fab" id="addBtn" aria-label="Add photos">+</button>
+  </footer>
+</section>
+
+<!-- ── lightbox ─────────────────────────────────────────────────────────── -->
+<div class="lightbox" id="lightbox" hidden>
+  <img id="lbImg" alt="">
+  <button class="lbclose" id="lbClose" aria-label="Close">✕</button>
+  <button class="lbnav prev" id="lbPrev" aria-label="Previous">‹</button>
+  <button class="lbnav next" id="lbNext" aria-label="Next">›</button>
+  <div class="lbbar">
+    <div class="lbmeta">
+      <span class="swatch" id="lbSwatch"></span>
+      <span id="lbWho"></span>
+      <span class="lbframe" id="lbFrame"></span>
+      <span class="lbdate" id="lbDate"></span>
+    </div>
+    <div class="lbacts">
+      <button class="btn" id="lbSave">Save</button>
+      <button class="btn danger" id="lbDelete" hidden>Delete</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── upload sheet ─────────────────────────────────────────────────────── -->
+<div class="sheet" id="upSheet" hidden>
+  <div class="sheetbox">
+    <div class="sheettop">
+      <h2 id="upTitle">Adding photos</h2>
+      <button class="btn ghost" id="upClose">Done</button>
+    </div>
+    <p class="upsummary" id="upSummary"></p>
+    <div class="uplist" id="upList"></div>
+    <button class="btn wide" id="upRetry" hidden>Retry what failed</button>
+  </div>
+</div>
+
+<input type="file" id="filePicker" accept="image/*" multiple hidden>
+
+<div class="toasts" id="toasts"></div>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
