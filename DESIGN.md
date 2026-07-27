@@ -5,9 +5,11 @@ bucket prefix into a shared trip-photo album for a group of friends on mixed
 iOS/Android devices. Album lifecycle is managed by a small Python CLI that reads
 a scoped Wasabi admin key from 1Password.
 
-**Status:** CLI implemented and live against `photoshare-wuerfel`
-(`eu-central-2`); security model verified on hardware (§2.2). Web app not
-started — Phase 0 de-risking complete (§10).
+**Status:** live. CLI implemented against `photoshare-wuerfel` (`eu-central-2`),
+security model verified on hardware (§2.2), and the web app built and deployed
+to `photos.wuerfel.io` — the whole loop, identity through bulk download (§10).
+Tested on iOS Safari and on Android; see §7.5 for the one browser class where
+saving to the gallery is not possible.
 
 ---
 
@@ -30,10 +32,13 @@ this idea.
 | Per-user "already downloaded" state, stored in the bucket | ✅ Yes |
 | "What's new since my last visit" | ✅ Yes |
 | Download all / sync | ✅ Yes |
-| Save directly into the phone's photo gallery | ✅ Verified on iOS and Android (§7.5) |
+| Save directly into the phone's photo gallery | ✅ iOS Safari and Android Chrome — **browser-dependent**, see §7.5 |
 
-No open feasibility questions remain — every row above was measured against the
-live account and a real iPhone during Phase 0 (§10), not inferred.
+Every row above was measured against the live account and real phones, not
+inferred. The one qualification is the last: saving into the gallery needs Web
+Share for files, which Android WebView browsers (DuckDuckGo and most non-Chrome
+Android browsers) do not implement. They download to Downloads instead. No page
+can work around that — §7.5 covers what the app does about it.
 
 ### 1.1 The CORS blocker is gone
 
@@ -913,26 +918,52 @@ meaningless.
 
 ### 7.5 Download / save to gallery
 
-**Android/Chrome — works well.** `navigator.share({ files: [...] })` opens the
-system sheet with a real "Save to Photos" target, multiple files per call.
+The dividing line is **not iOS versus Android — it's whether the browser
+implements Web Share for files.** That turned out to matter more than the
+platform split this section originally assumed.
 
 **iOS/Safari — works. Verified 2026-07-27.** This was the biggest open risk in
 the design, because file sharing has historically been flaky on iOS: it worked
 in 15.7, [regressed in iOS 16][ios16] to offer only "Save to Files", and shifted
-across releases after that. Measured on a real iPhone against
-`photos.wuerfel.io/spike/`, the share sheet **did** offer *Save Photo* and the
-image landed in the photo library. The download story is therefore sound on both
-platforms.
+across releases after that. Measured on a real iPhone, the share sheet **did**
+offer *Save Photo*, for a single file and for a 3-file batch, and the images
+landed in the photo library.
 
-Two caveats worth keeping:
+**Android/Chrome — works well.** `navigator.share({ files })` opens the system
+sheet with a real "Save to Photos" target, multiple files per call. Samsung
+Internet and Edge are Chromium too, so they behave the same.
 
-- **Single-file only, so far.** The verified case shared one file. Multi-file
-  batches are the mechanism §7.5 relies on for "download all new", and iOS has
-  its own behaviour there ("Save N Images", or silently degrading). Test 5 in
-  the spike covers this — settle it before building the bulk-download UI.
-- **It is an OS behaviour, not a contract.** It regressed once before and could
-  again. Keep the fallback path in the UI: long-press the full-size image →
-  *Add to Photos*, which always works and is what iOS users do reflexively.
+**Android, everything else — no Web Share at all.** Found the hard way on a
+Fairphone running DuckDuckGo, 2026-07-27: bulk save produced *one* file, in
+Downloads, named after a blob UUID. DuckDuckGo's Android browser — like most
+non-Chrome Android browsers — is built on Android WebView, and **WebView does
+not expose `navigator.share`**. So the code fell to the desktop download path,
+where two further things break:
+
+- `<a download>` is ignored, so the filename comes from the `blob:` URL — hence
+  the UUID.
+- Only the first download in a gesture survives; the rest are dropped silently.
+  Desktop Chrome asks "Download multiple files?" and then allows them, which is
+  why this never showed up until a phone tried it.
+
+The fix is in two parts. Filenames now come from the **server**: the download
+URL is presigned with `response-content-disposition`, so Wasabi names the file
+and no `blob:` URL is involved. aws4fetch signs every query parameter, so the
+disposition is covered by the signature (verified locally). A side benefit is
+that the bytes never pass through JS on this path at all — the browser
+downloads straight from Wasabi.
+
+And bulk download **steps one tap at a time on touch devices** (`isTouch()`,
+i.e. `maxTouchPoints` or `pointer: coarse`) rather than firing a queue that
+will be thrown away. Tedious for twenty photos, but every photo actually
+arrives, and the sheet says plainly that this browser can't reach the gallery
+and that Chrome can.
+
+**It is an OS behaviour, not a contract.** iOS regressed once before and could
+again. The fallback stays available: long-press the full-size image →
+*Add to Photos*, which always works and is what people do reflexively. `#lbImg`
+therefore keeps `-webkit-touch-callout: default` — do not set it to `none` to
+"clean up" the long-press menu.
 
 **The gesture gotcha:** Safari requires `navigator.share()` to be called inside
 a user-gesture task. `await fetch(...)` first and the gesture is gone
@@ -951,9 +982,12 @@ shareBtn.onclick = () => {
 };
 ```
 
-Batch ~10 files per call. **Desktop:** ZIP with [`fflate`]. On mobile a ZIP is
-near-useless (lands in Files, never reaches the gallery), so branch on
-`navigator.canShare?.({ files: [] })`, not on user-agent sniffing.
+Batch ~10 files per call.
+
+Branch on `canShare({ files })` with a real probe file, never on user-agent
+sniffing — and note that `canShare({ files: [] })` is not a reliable probe,
+since some implementations return false for an empty array regardless of
+support.
 
 ---
 
@@ -1021,9 +1055,9 @@ Given limited JS experience: **no build step, no framework.**
   `render()` that rebuilds the gallery from a state object is ~50 lines and will
   teach you more than React would. [Preact] via CDN import is an easy later step
   if it grows.
-- **Two vendored dependencies**: [`aws4fetch`] (signing) and [`fflate`] (ZIP).
-  Hashing, resizing, and sharing are native browser APIs. Vendor both as single
-  files rather than trusting a CDN to stay up.
+- **One vendored dependency**: [`aws4fetch`] (signing). Hashing, resizing,
+  sharing and downloading are all native browser APIs. Vendor it as a single
+  file rather than trusting a CDN to stay up.
 
 As built:
 
@@ -1162,5 +1196,4 @@ Two things worth knowing before you build:
 [aws-size]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/amazon-s3-policy-keys.html
 [ios16]: https://developer.apple.com/forums/thread/729782
 [`aws4fetch`]: https://github.com/mhart/aws4fetch
-[`fflate`]: https://github.com/101arrowz/fflate
 [Preact]: https://preactjs.com/

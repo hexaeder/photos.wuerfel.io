@@ -106,5 +106,28 @@ export function s3Backend({ ep, rg, b, p, k, s }) {
     return signed.url;
   }
 
-  return { list, get, put, remove, getJSON, putJSON, urlFor };
+  /**
+   * A presigned URL that downloads under a chosen filename.
+   *
+   * `response-content-disposition` makes the *server* name the file, which
+   * matters because a `blob:` URL plus `<a download>` is unreliable outside
+   * desktop browsers — Android WebView ignores the download attribute and
+   * saves the blob's UUID instead. It also means no bytes pass through JS at
+   * all: the browser downloads straight from Wasabi.
+   *
+   * aws4fetch signs every query parameter, so the disposition is covered by
+   * the signature and cannot be tampered with.
+   */
+  async function downloadUrlFor(path, filename, seconds = 3600) {
+    const u = new URL(url(path));
+    u.searchParams.set('X-Amz-Expires', String(seconds));
+    u.searchParams.set('response-content-disposition',
+      `attachment; filename="${filename.replace(/["\\]/g, '')}"`);
+    const signed = await aws.sign(u.toString(), {
+      method: 'GET', aws: { signQuery: true },
+    });
+    return signed.url;
+  }
+
+  return { list, get, put, remove, getJSON, putJSON, urlFor, downloadUrlFor };
 }

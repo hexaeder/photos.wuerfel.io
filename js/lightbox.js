@@ -1,7 +1,7 @@
 import { $, toast, confirmSheet, shortDate } from './ui.js';
 import { colorFor, nameOf } from './identity.js';
 import { frameNo, downloadName } from './photos.js';
-import { canShareFiles, saveOne } from './share.js';
+import { canShareFiles, shareFiles, downloadUrl, isTouch } from './share.js';
 
 export function createLightbox({ backend, album, seen, onDeleted, onSaved, ctx }) {
   const box = $('lightbox');
@@ -12,8 +12,10 @@ export function createLightbox({ backend, album, seen, onDeleted, onSaved, ctx }
 
   const cur = () => list[i];
 
-  // Desktop has no share sheet, so the button says what actually happens.
-  const SAVE_LABEL = canShareFiles() ? 'Save' : 'Download';
+  // The button says what will actually happen, which is not the same thing on
+  // every browser.
+  const CAN_SHARE = canShareFiles();
+  const SAVE_LABEL = CAN_SHARE ? 'Save' : 'Download';
 
   async function paint() {
     const rec = cur();
@@ -42,20 +44,28 @@ export function createLightbox({ backend, album, seen, onDeleted, onSaved, ctx }
     btn.disabled = true;
     btn.textContent = SAVE_LABEL;
 
+    // With Web Share, fetch the original in the background so that when Save
+    // is tapped there is nothing left to await — iOS drops the user gesture
+    // across an await, and that is what keeps the share sheet reachable in one
+    // tap. Without Web Share we never need the bytes in JS at all: a presigned
+    // download URL does the job and the button works immediately.
     const [url, blob] = await Promise.allSettled([
       backend.urlFor(rec.key),
-      backend.get(rec.key),
+      CAN_SHARE ? backend.get(rec.key)
+                : backend.downloadUrlFor(rec.key, downloadName(rec, album.n)),
     ]);
     if (token !== mine) return;                   // swiped away; discard both
 
     if (url.status === 'fulfilled') $('lbImg').src = url.value;
-    if (blob.status === 'fulfilled') {
-      ready = new File([blob.value], downloadName(rec, album.n),
-                       { type: blob.value.type || 'image/jpeg' });
-      btn.disabled = false;
-    } else {
+    if (blob.status !== 'fulfilled') {
       btn.textContent = 'Unavailable';
+      return;
     }
+    ready = CAN_SHARE
+      ? new File([blob.value], downloadName(rec, album.n),
+                 { type: blob.value.type || 'image/jpeg' })
+      : blob.value;                               // a URL string
+    btn.disabled = false;
   }
 
   function open(recs, rec) {
@@ -108,15 +118,20 @@ export function createLightbox({ backend, album, seen, onDeleted, onSaved, ctx }
 
   $('lbSave').onclick = async () => {
     const rec = cur();
-    const file = ready;
-    if (!file) return;
-    try {
-      const how = await saveOne(file);            // no await before this one
+    if (!ready) return;
+
+    if (!CAN_SHARE) {
+      downloadUrl(ready);
       seen.markSaved([rec]);
       onSaved?.();
-      toast(how === 'shared'
-        ? 'Marked as saved — pick “Save Image” in the sheet'
-        : 'Downloaded');
+      toast(isTouch() ? 'Saved to Downloads' : 'Downloaded');
+      return;
+    }
+    try {
+      await shareFiles([ready]);                  // nothing awaited before this
+      seen.markSaved([rec]);
+      onSaved?.();
+      toast('Marked as saved — pick “Save Image” in the sheet');
     } catch (e) {
       if (e.name === 'AbortError') return;        // the user dismissed the sheet
       toast(`Could not save: ${e.message}`, 'bad');

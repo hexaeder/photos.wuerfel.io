@@ -63,25 +63,37 @@ export async function fetchFiles(backend, recs, albumName, onProgress) {
  */
 export const shareFiles = (files) => navigator.share({ files });
 
-/** Desktop: sequential downloads. Chrome asks once, then allows the rest. */
-export async function downloadFiles(files) {
-  for (const f of files) {
-    const url = URL.createObjectURL(f);
-    const a = Object.assign(document.createElement('a'), { href: url, download: f.name });
-    document.body.append(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 10_000);
-    await new Promise((r) => setTimeout(r, 300));
+/**
+ * Phones without Web Share need one download per tap.
+ *
+ * Desktop browsers happily fire a queue of downloads from a single gesture
+ * (Chrome asks once, then allows the rest). Android WebView browsers — which
+ * is what DuckDuckGo, and anything else not built on Chrome, actually is —
+ * silently drop everything after the first. So on a touch device we step
+ * through instead of pretending the queue worked.
+ */
+export const isTouch = () =>
+  navigator.maxTouchPoints > 0 || matchMedia('(pointer: coarse)').matches;
+
+/** Trigger one download. Synchronous, so it can sit inside a tap handler. */
+export function downloadUrl(url) {
+  const a = Object.assign(document.createElement('a'), {
+    href: url, rel: 'noopener',
+  });
+  document.body.append(a);
+  a.click();
+  a.remove();
+}
+
+/** Desktop: fire the whole queue. */
+export async function downloadAll(urls) {
+  for (const url of urls) {
+    downloadUrl(url);
+    await new Promise((r) => setTimeout(r, 350));
   }
 }
 
-/** One file, one tap — used by the lightbox where the blob is already in hand. */
-export async function saveOne(file) {
-  if (canShareFiles()) {
-    await shareFiles([file]);
-    return 'shared';
-  }
-  await downloadFiles([file]);
-  return 'downloaded';
-}
+/** Why file-saving is unavailable, in words a person can act on. */
+export const noShareReason = () => isTouch()
+  ? 'This browser can’t hand photos to your gallery app, so they download to your Downloads folder instead. Chrome and Samsung Internet can save straight to Photos.'
+  : 'Downloading to this computer.';

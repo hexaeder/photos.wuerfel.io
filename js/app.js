@@ -1,7 +1,7 @@
 import { $, el, show, toast, taskSheet, plural } from './ui.js';
 import { albumFromLocation, albumFromText } from './album.js';
 import { s3Backend } from './backend-s3.js';
-import { parsePhotos, hashesOf, frameNo } from './photos.js';
+import { parsePhotos, hashesOf, frameNo, downloadName } from './photos.js';
 import {
   loadMe, saveMe, newUid, randomName, colorFor, setPalette,
   loadUsers, writeUser, nameOf,
@@ -10,7 +10,10 @@ import { createSeen } from './seen.js';
 import { createGallery } from './gallery.js';
 import { createLightbox } from './lightbox.js';
 import { createUploader } from './upload.js';
-import { canShareFiles, fetchFiles, chunk, shareFiles, downloadFiles, BATCH } from './share.js';
+import {
+  canShareFiles, fetchFiles, chunk, shareFiles, BATCH,
+  isTouch, downloadUrl, downloadAll, noShareReason,
+} from './share.js';
 
 /** Shared state. The lightbox reads me/users through this, so a rename or an
     identity switch reaches it without rewiring anything. */
@@ -205,15 +208,17 @@ async function saveAll() {
   const list = gallery.pending();
   if (!list.length) return;
 
+  const label = (r) => `${frameNo(r.num)} · ${nameOf(ctx.users, r.uid)}`;
+
+  if (!canShareFiles()) return downloadAll_(list, label);
+
   taskSheet.open({
-    title: canShareFiles() ? 'Saving to your photos' : 'Downloading',
+    title: 'Saving to your photos',
     summary: `Fetching ${plural(list.length, 'photo')}…`,
   });
 
   const rows = new Map();
-  for (const r of list) {
-    rows.set(r.base, taskSheet.row(`${frameNo(r.num)} · ${nameOf(ctx.users, r.uid)}`));
-  }
+  for (const r of list) rows.set(r.base, taskSheet.row(label(r)));
 
   let files;
   try {
@@ -223,15 +228,6 @@ async function saveAll() {
     });
   } catch (e) {
     taskSheet.summary(explain(e)).action('Close', () => taskSheet.close());
-    return;
-  }
-
-  if (!canShareFiles()) {
-    await downloadFiles(files);
-    seen.markSaved(list);
-    gallery.refresh();
-    taskSheet.summary(`${plural(files.length, 'photo')} downloaded.`)
-             .action('Done', () => taskSheet.close());
     return;
   }
 
@@ -266,6 +262,66 @@ async function saveAll() {
       });
   };
   offer();
+}
+
+/**
+ * No Web Share: download instead.
+ *
+ * The bytes never touch JS here — each photo gets a presigned URL that carries
+ * its own filename, so the browser downloads straight from Wasabi under a name
+ * like `norway-2026-007.jpg`.
+ *
+ * Desktop can fire the whole queue from one gesture. A phone cannot: Android
+ * WebView browsers drop everything after the first download, which is exactly
+ * how this surfaced — eleven photos requested, one arrived, named after a blob
+ * UUID. So on a touch device we step through, one tap per photo, and say why.
+ */
+async function downloadAll_(list, label) {
+  taskSheet.open({
+    title: 'Downloading',
+    summary: `Preparing ${plural(list.length, 'photo')}…`,
+  });
+
+  const rows = list.map((r) => taskSheet.row(label(r)));
+
+  let items;
+  try {
+    items = await Promise.all(list.map(async (rec) => ({
+      rec,
+      url: await backend.downloadUrlFor(rec.key, downloadName(rec, album.n)),
+    })));
+  } catch (e) {
+    taskSheet.summary(explain(e)).action('Close', () => taskSheet.close());
+    return;
+  }
+
+  const finish = () => {
+    seen.markSaved(list);
+    gallery.refresh();
+    taskSheet.summary(`${plural(list.length, 'photo')} sent to Downloads.`)
+             .action('Done', () => taskSheet.close());
+  };
+
+  if (!isTouch()) {
+    taskSheet.summary(noShareReason());
+    await downloadAll(items.map((i) => i.url));
+    rows.forEach((set) => set('done', 'Saved'));
+    finish();
+    return;
+  }
+
+  let i = 0;
+  const offerNext = () => {
+    taskSheet.summary(noShareReason());
+    taskSheet.action(`Download ${i + 1} of ${items.length}`, () => {
+      downloadUrl(items[i].url);          // synchronous: stays inside the tap
+      rows[i]('done', 'Saved');
+      i++;
+      if (i < items.length) offerNext();
+      else finish();
+    });
+  };
+  offerNext();
 }
 
 // ── boot ─────────────────────────────────────────────────────────────────
