@@ -856,16 +856,23 @@ meaningless.
 **Android/Chrome — works well.** `navigator.share({ files: [...] })` opens the
 system sheet with a real "Save to Photos" target, multiple files per call.
 
-**iOS/Safari — expect trouble.** File sharing exists (iOS 15+), but "Save to
-Photos" for images has been genuinely flaky: it worked in 15.7,
-[regressed in iOS 16][ios16] to offer only "Save to Files", and has shifted
-across releases since. I could not confirm current behaviour, so **test it on a
-real device early** — it's the most likely feature to disappoint, and worth
-knowing before building download UI around it.
+**iOS/Safari — works. Verified 2026-07-27.** This was the biggest open risk in
+the design, because file sharing has historically been flaky on iOS: it worked
+in 15.7, [regressed in iOS 16][ios16] to offer only "Save to Files", and shifted
+across releases after that. Measured on a real iPhone against
+`photos.wuerfel.io/spike/`, the share sheet **did** offer *Save Photo* and the
+image landed in the photo library. The download story is therefore sound on both
+platforms.
 
-Fallbacks: `navigator.share` → long-press the full-size image → *Add to Photos*
-(always works, and is what iOS users do reflexively) → ZIP into Files. Ship the
-long-press hint rather than pretending the API path always works.
+Two caveats worth keeping:
+
+- **Single-file only, so far.** The verified case shared one file. Multi-file
+  batches are the mechanism §7.5 relies on for "download all new", and iOS has
+  its own behaviour there ("Save N Images", or silently degrading). Test 5 in
+  the spike covers this — settle it before building the bulk-download UI.
+- **It is an OS behaviour, not a contract.** It regressed once before and could
+  again. Keep the fallback path in the UI: long-press the full-size image →
+  *Add to Photos*, which always works and is what iOS users do reflexively.
 
 **The gesture gotcha:** Safari requires `navigator.share()` to be called inside
 a user-gesture task. `await fetch(...)` first and the gesture is gone

@@ -47,7 +47,8 @@
   <button id="tList" disabled>1. List objects</button>
   <button id="tPut" disabled>2. Upload a text file</button>
   <button id="tImg" disabled>3. Presigned &lt;img&gt;</button>
-  <button id="tShare" disabled>4. Web Share (phone)</button>
+  <button id="tShare" disabled>4. Web Share, 1 file (phone)</button>
+  <button id="tShareMulti" disabled>5. Web Share, 3 files (phone)</button>
   <br>
   <label>Real photo upload: <input type="file" id="photo" accept="image/*" multiple disabled></label>
 </fieldset>
@@ -95,7 +96,8 @@ function loadAlbum(raw) {
     accessKeyId: A.k, secretAccessKey: A.s, region: A.rg, service: 's3',
   });
   $('albumName').textContent = `${A.n} — ${A.b}/${A.p} @ ${A.rg}`;
-  for (const id of ['tList', 'tPut', 'tImg', 'tShare', 'photo']) $(id).disabled = false;
+  for (const id of ['tList', 'tPut', 'tImg', 'tShare', 'tShareMulti', 'photo'])
+    $(id).disabled = false;
   log(`loaded album "${A.n}"  bucket=${A.b}  prefix=${A.p}`);
   log(`secure context: ${window.isSecureContext}, crypto.subtle: ${!!crypto.subtle}`);
   if (!window.isSecureContext) {
@@ -204,6 +206,49 @@ $('tShare').onclick = async () => {
     .catch((e) => bad('share: ' + e.name + ' ' + e.message));
   $('tShare').after(btn);
   log('button added — tap it. A second tap is required on iOS.', 'dim');
+};
+
+// --- 5. multi-file share (what "download all" depends on) ----------------
+
+// Distinguishable colours at a visible size, so you can tell in the photo
+// library how many actually arrived.
+async function makeSwatch(color, label) {
+  const cv = new OffscreenCanvas(600, 600);
+  const g = cv.getContext('2d');
+  g.fillStyle = color; g.fillRect(0, 0, 600, 600);
+  g.fillStyle = '#fff'; g.font = 'bold 160px system-ui';
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillText(label, 300, 300);
+  return cv.convertToBlob({ type: 'image/jpeg', quality: 0.9 });
+}
+
+$('tShareMulti').onclick = async () => {
+  if (!navigator.share) { bad('navigator.share unavailable (desktop browser?)'); return; }
+  log('preparing 3 files…');
+
+  let files;
+  try {
+    const specs = [['#c0392b', '1'], ['#27ae60', '2'], ['#2980b9', '3']];
+    files = await Promise.all(specs.map(async ([c, n]) => {
+      const blob = await makeSwatch(c, n);
+      const key = `spike/swatch-${n}.jpg`;
+      await put(key, blob, 'image/jpeg');
+      const fresh = await (await fetch(await presign(key))).blob();
+      return new File([fresh], `photoshare-${n}.jpg`, { type: 'image/jpeg' });
+    }));
+  } catch (e) { bad('could not prepare files: ' + e.message); return; }
+
+  if (!navigator.canShare?.({ files })) {
+    bad('canShare() rejects 3 files — batch sharing unsupported here');
+    return;
+  }
+  const btn = document.createElement('button');
+  btn.textContent = 'Tap to share 3 images';
+  btn.onclick = () => navigator.share({ files })
+    .then(() => ok('shared — check the library: did all 3 (red 1, green 2, blue 3) arrive?'))
+    .catch((e) => bad('share: ' + e.name + ' ' + e.message));
+  $('tShareMulti').after(btn);
+  log('button added — tap it, then count the images in your library.', 'dim');
 };
 
 // --- real photo upload ---------------------------------------------------
