@@ -33,6 +33,11 @@
 
 *, *::before, *::after { box-sizing: border-box; }
 
+/* Any `display` declaration outranks the UA's `[hidden] { display: none }`,
+   so every flex/grid/block element the app hides would render anyway. This is
+   easy to reintroduce one component at a time; make it structural instead. */
+[hidden] { display: none !important; }
+
 html, body {
   margin: 0;
   max-width: 100%;
@@ -293,13 +298,39 @@ textarea {
 }
 
 .meta {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
   margin-top: .3rem;
   font: 10px/1.4 var(--mono);
   letter-spacing: .12em;
   text-transform: uppercase;
   color: var(--ink-dim);
 }
+.meta > span:first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .meta b { color: var(--safelight); font-weight: 400; }
+
+/* Long-press already selects, but nobody discovers a long-press. */
+.metabtn {
+  flex: 0 0 auto;
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: .2rem 0 .2rem .5rem;
+  font: inherit;
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: var(--rule);
+  cursor: pointer;
+}
+.metabtn:hover { text-decoration-color: var(--ink-dim); }
 
 /* ── filters: scrolls inside itself, never the page ───────────────────── */
 
@@ -364,7 +395,6 @@ textarea {
   border: 0;
   cursor: pointer;
 }
-.tile[hidden] { display: none; }
 
 .shot {
   position: relative;
@@ -442,6 +472,69 @@ textarea {
   transform: rotate(38deg);
 }
 
+/* ── selection ────────────────────────────────────────────────────────────
+   Thumbnails must not offer the OS long-press menu, or it fires instead of
+   entering selection. The full-size image in the lightbox keeps it, because
+   "Add to Photos" from a long-press is the fallback when Web Share isn't
+   available. */
+
+.tile {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.selbox {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  width: 19px;
+  height: 19px;
+  border-radius: 50%;
+  border: 2px solid #fffc;
+  background: #0006;
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, .85));
+  display: none;
+}
+.grid.selecting .selbox { display: block; }
+
+.grid.selecting .tile[data-sel="on"] .selbox {
+  background: var(--safelight);
+  border-color: var(--safelight);
+}
+.grid.selecting .tile[data-sel="on"] .selbox::after {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: 3px;
+  width: 4px;
+  height: 8px;
+  border: 2px solid #1A0C05;
+  border-top: 0;
+  border-left: 0;
+  transform: rotate(40deg);
+}
+.grid.selecting .tile[data-sel="on"] .shot {
+  border-color: var(--safelight);
+}
+.grid.selecting .tile[data-sel="on"] img { opacity: .55; }
+
+.selacts {
+  display: flex;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+}
+.selacts .btn {
+  flex: 1 1 0;
+  min-width: 0;
+  padding-inline: .4rem;
+  background: var(--sheet);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .empty {
   padding: 3.5rem var(--pad);
   text-align: center;
@@ -513,7 +606,34 @@ textarea {
 }
 .lightbox[hidden] { display: none; }
 
-#lbImg {
+/* Paging is a native scroll-snap carousel. Doing it by hand gave no movement
+   at all — the image just cut to the next one — and it lost the axis fight
+   with the page, so a swipe scrolled vertically first. `touch-action: pan-x`
+   settles that outright: this element owns horizontal gestures and refuses
+   vertical ones. */
+.lbtrack {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x mandatory;
+  overscroll-behavior: contain;
+  touch-action: pan-x;
+  scrollbar-width: none;
+}
+.lbtrack::-webkit-scrollbar { display: none; }
+
+.lbslide {
+  flex: 0 0 100%;
+  min-width: 0;
+  scroll-snap-align: center;
+  scroll-snap-stop: always;     /* one photo per flick, not four */
+  display: grid;
+  place-items: center;
+}
+
+.lbslide img {
   max-width: 100%;
   max-height: 100dvh;           /* dvh: iOS Safari's toolbar makes vh wrong */
   object-fit: contain;

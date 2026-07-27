@@ -83,6 +83,14 @@ export function createSeen(backend, albumKey, uid) {
       return added;
     },
 
+    /** Undo a save mark — "actually, I still want this one". */
+    markUnsaved(recs) {
+      let removed = 0;
+      for (const r of recs) if (downloaded.delete(r.hash)) removed++;
+      if (removed) schedule();
+      return removed;
+    },
+
     /** Advance lastSeenAt — call once the gallery has actually been looked at,
         not on every page load, or "new" stops meaning anything. */
     touch() {

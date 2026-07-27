@@ -1,120 +1,169 @@
-import { $, toast, confirmSheet, shortDate } from './ui.js';
+import { $, el, toast, confirmSheet, shortDate } from './ui.js';
 import { colorFor, nameOf } from './identity.js';
 import { frameNo, downloadName } from './photos.js';
 import { canShareFiles, shareFiles, downloadUrl, isTouch } from './share.js';
 
-export function createLightbox({ backend, album, seen, onDeleted, onSaved, ctx }) {
+// Paging is a native scroll-snap carousel rather than a touchend handler.
+//
+// The hand-rolled version had no movement — the image just cut to the next one
+// — and it fought the page for the gesture, so a swipe scrolled vertically
+// first. Handing the job to the browser buys finger-tracking, momentum,
+// rubber-banding at the ends and correct gesture arbitration for free, and
+// `touch-action: pan-x` on the track settles the axis question outright.
+//
+// Slides are created for every photo but only carry an `src` within ±2 of the
+// current one; anything past ±4 is unloaded again, because a few dozen
+// full-size decodes is how you crash mobile Safari.
+
+const NEAR = 2;
+const FAR = 4;
+
+export function createLightbox({ backend, album, seen, onDeleted, onChanged, ctx }) {
   const box = $('lightbox');
+  const track = $('lbTrack');
+
   let list = [];
-  let i = 0;
-  let ready = null;      // File for the photo on screen, once fetched
-  let token = 0;         // guards against a slow fetch landing after a swipe
+  let idx = 0;
+  let ready = null;      // File (share) or URL string (download), for the
+  let token = 0;         // current slide; token guards a slow fetch landing
+                         // after the user has swiped on.
 
-  const cur = () => list[i];
-
-  // The button says what will actually happen, which is not the same thing on
-  // every browser.
   const CAN_SHARE = canShareFiles();
   const SAVE_LABEL = CAN_SHARE ? 'Save' : 'Download';
+  const cur = () => list[idx];
 
-  async function paint() {
+  // ── slides ─────────────────────────────────────────────────────────────
+
+  function buildTrack() {
+    track.replaceChildren(...list.map(() =>
+      el('div', { class: 'lbslide' }, el('img', { alt: '', decoding: 'async' }))));
+  }
+
+  const imgAt = (i) => track.children[i]?.firstElementChild;
+
+  async function hydrate(i) {
+    const img = imgAt(i);
+    const rec = list[i];
+    if (!img || !rec || img.dataset.k === rec.base) return;
+    img.dataset.k = rec.base;
+    try {
+      img.src = await backend.urlFor(rec.key);
+    } catch {
+      delete img.dataset.k;
+    }
+  }
+
+  function loadWindow() {
+    for (let i = 0; i < list.length; i++) {
+      const d = Math.abs(i - idx);
+      const img = imgAt(i);
+      if (!img) continue;
+      if (d <= NEAR) hydrate(i);
+      else if (d > FAR && img.src) { img.removeAttribute('src'); delete img.dataset.k; }
+    }
+  }
+
+  // ── the current photo ──────────────────────────────────────────────────
+
+  async function onIndex() {
     const rec = cur();
     if (!rec) return close();
 
     const mine = ++token;
-    const me = ctx.me;
     const users = ctx.users;
+    const colour = colorFor(rec.uid);
 
-    $('lbImg').alt = `Frame ${frameNo(rec.num)} by ${nameOf(users, rec.uid)}`;
-    $('lbSwatch').style.setProperty('--person', colorFor(rec.uid));
+    $('lbSwatch').style.setProperty('--person', colour);
     $('lbWho').textContent = nameOf(users, rec.uid);
     $('lbFrame').textContent = frameNo(rec.num);
-    $('lbFrame').style.setProperty('--person', colorFor(rec.uid));
+    $('lbFrame').style.setProperty('--person', colour);
     $('lbDate').textContent = shortDate(rec.ts);
 
-    $('lbPrev').hidden = i === 0;
-    $('lbNext').hidden = i === list.length - 1;
-    $('lbDelete').hidden = !(rec.uid === me?.uid && !album.readonly);
+    $('lbPrev').hidden = idx === 0;
+    $('lbNext').hidden = idx === list.length - 1;
+    $('lbDelete').hidden = album.readonly;
+    $('lbUnmark').hidden = !seen.isSaved(rec);
 
-    // Fetch the original in the background so that when Save is tapped there
-    // is nothing left to await. iOS drops the user gesture across an await,
-    // so this is what keeps the share sheet reachable in one tap.
+    loadWindow();
+
+    // With Web Share, the bytes must already be in hand when Save is tapped —
+    // iOS drops the gesture across an await. Without it, a presigned download
+    // URL does the job and nothing needs fetching.
     ready = null;
     const btn = $('lbSave');
     btn.disabled = true;
     btn.textContent = SAVE_LABEL;
-
-    // With Web Share, fetch the original in the background so that when Save
-    // is tapped there is nothing left to await — iOS drops the user gesture
-    // across an await, and that is what keeps the share sheet reachable in one
-    // tap. Without Web Share we never need the bytes in JS at all: a presigned
-    // download URL does the job and the button works immediately.
-    const [url, blob] = await Promise.allSettled([
-      backend.urlFor(rec.key),
-      CAN_SHARE ? backend.get(rec.key)
-                : backend.downloadUrlFor(rec.key, downloadName(rec, album.n)),
-    ]);
-    if (token !== mine) return;                   // swiped away; discard both
-
-    if (url.status === 'fulfilled') $('lbImg').src = url.value;
-    if (blob.status !== 'fulfilled') {
-      btn.textContent = 'Unavailable';
-      return;
+    try {
+      const got = CAN_SHARE
+        ? await backend.get(rec.key)
+        : await backend.downloadUrlFor(rec.key, downloadName(rec, album.n));
+      if (token !== mine) return;                    // swiped on; discard
+      ready = CAN_SHARE
+        ? new File([got], downloadName(rec, album.n),
+                   { type: got.type || 'image/jpeg' })
+        : got;
+      btn.disabled = false;
+    } catch {
+      if (token === mine) btn.textContent = 'Unavailable';
     }
-    ready = CAN_SHARE
-      ? new File([blob.value], downloadName(rec, album.n),
-                 { type: blob.value.type || 'image/jpeg' })
-      : blob.value;                               // a URL string
-    btn.disabled = false;
   }
+
+  // ── paging ─────────────────────────────────────────────────────────────
+
+  function goTo(i, smooth = true) {
+    const next = Math.max(0, Math.min(list.length - 1, i));
+    track.scrollTo({ left: next * track.clientWidth, behavior: smooth ? 'smooth' : 'auto' });
+    if (next !== idx) { idx = next; onIndex(); }
+  }
+
+  let settle;
+  track.addEventListener('scroll', () => {
+    clearTimeout(settle);
+    settle = setTimeout(() => {
+      const i = Math.round(track.scrollLeft / track.clientWidth);
+      if (i !== idx && i >= 0 && i < list.length) { idx = i; onIndex(); }
+    }, 80);
+  }, { passive: true });
+
+  addEventListener('resize', () => {
+    if (!box.hidden) track.scrollLeft = idx * track.clientWidth;
+  });
+
+  // ── open / close ───────────────────────────────────────────────────────
 
   function open(recs, rec) {
     list = recs;
-    i = Math.max(0, recs.findIndex((r) => r.base === rec.base));
+    idx = Math.max(0, recs.findIndex((r) => r.base === rec.base));
     box.hidden = false;
     document.body.style.overflow = 'hidden';
-    paint();
+    buildTrack();
+    // The track needs a layout pass before scrollLeft means anything.
+    requestAnimationFrame(() => {
+      track.scrollLeft = idx * track.clientWidth;
+      onIndex();
+    });
   }
 
   function close() {
     box.hidden = true;
     document.body.style.overflow = '';
-    $('lbImg').removeAttribute('src');
+    track.replaceChildren();
     ready = null;
     token++;
   }
 
-  const step = (d) => {
-    const next = i + d;
-    if (next < 0 || next >= list.length) return;
-    i = next;
-    paint();
-  };
-
   $('lbClose').onclick = close;
-  $('lbPrev').onclick = () => step(-1);
-  $('lbNext').onclick = () => step(1);
-
-  box.addEventListener('click', (e) => { if (e.target === box) close(); });
+  $('lbPrev').onclick = () => goTo(idx - 1);
+  $('lbNext').onclick = () => goTo(idx + 1);
 
   document.addEventListener('keydown', (e) => {
     if (box.hidden) return;
     if (e.key === 'Escape') close();
-    else if (e.key === 'ArrowLeft') step(-1);
-    else if (e.key === 'ArrowRight') step(1);
+    else if (e.key === 'ArrowLeft') goTo(idx - 1);
+    else if (e.key === 'ArrowRight') goTo(idx + 1);
   });
 
-  let touch = null;
-  box.addEventListener('touchstart', (e) => {
-    touch = { x: e.changedTouches[0].clientX, y: e.changedTouches[0].clientY };
-  }, { passive: true });
-  box.addEventListener('touchend', (e) => {
-    if (!touch) return;
-    const dx = e.changedTouches[0].clientX - touch.x;
-    const dy = e.changedTouches[0].clientY - touch.y;
-    touch = null;
-    if (Math.abs(dx) > 55 && Math.abs(dy) < 80) step(dx < 0 ? 1 : -1);
-  }, { passive: true });
+  // ── actions ────────────────────────────────────────────────────────────
 
   $('lbSave').onclick = async () => {
     const rec = cur();
@@ -123,27 +172,42 @@ export function createLightbox({ backend, album, seen, onDeleted, onSaved, ctx }
     if (!CAN_SHARE) {
       downloadUrl(ready);
       seen.markSaved([rec]);
-      onSaved?.();
+      onChanged?.();
+      $('lbUnmark').hidden = false;
       toast(isTouch() ? 'Saved to Downloads' : 'Downloaded');
       return;
     }
     try {
-      await shareFiles([ready]);                  // nothing awaited before this
+      await shareFiles([ready]);                    // nothing awaited before this
       seen.markSaved([rec]);
-      onSaved?.();
+      onChanged?.();
+      $('lbUnmark').hidden = false;
       toast('Marked as saved — pick “Save Image” in the sheet');
     } catch (e) {
-      if (e.name === 'AbortError') return;        // the user dismissed the sheet
+      if (e.name === 'AbortError') return;          // sheet dismissed
       toast(`Could not save: ${e.message}`, 'bad');
     }
   };
 
+  $('lbUnmark').onclick = () => {
+    const rec = cur();
+    seen.markUnsaved([rec]);
+    onChanged?.();
+    $('lbUnmark').hidden = true;
+    toast('Marked as not saved');
+  };
+
   $('lbDelete').onclick = async () => {
     const rec = cur();
+    const mine = rec.uid === ctx.me?.uid;
+    const who = nameOf(ctx.users, rec.uid);
+
     const go = await confirmSheet({
       title: `Delete frame ${frameNo(rec.num)}?`,
-      body: 'This removes it from the album for everyone, permanently — there are no older versions to fall back on.',
-      confirm: 'Delete',
+      body: mine
+        ? 'This removes it from the album for everyone, permanently — there are no older versions to fall back on.'
+        : `This is ${who}’s photo. Deleting it removes it for everyone, permanently, and ${who} is not told.`,
+      confirm: mine ? 'Delete' : `Delete ${who}’s photo`,
       danger: true,
     });
     if (!go) return;
@@ -158,11 +222,18 @@ export function createLightbox({ backend, album, seen, onDeleted, onSaved, ctx }
       return;
     }
 
+    const at = idx;
     list = list.filter((r) => r.base !== rec.base);
     onDeleted?.(rec);
-    if (!list.length) close();
-    else { i = Math.min(i, list.length - 1); paint(); }
     toast('Deleted');
+
+    if (!list.length) return close();
+    idx = Math.min(at, list.length - 1);
+    buildTrack();
+    requestAnimationFrame(() => {
+      track.scrollLeft = idx * track.clientWidth;
+      onIndex();
+    });
   };
 
   return { open, close };

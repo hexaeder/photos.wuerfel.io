@@ -7,7 +7,9 @@ import { frameNo } from './photos.js';
 
 const STAGGER_MAX = 30;   // only the first screenful gets the entrance
 
-export function createGallery({ backend, seen, onOpen, onSaveAll }) {
+const LONG_PRESS_MS = 450;
+
+export function createGallery({ backend, seen, onOpen, onSelect }) {
   const grid = $('grid');
   const tiles = new Map();        // base → <button>
   const signed = new Map();       // path → presigned URL
@@ -16,6 +18,9 @@ export function createGallery({ backend, seen, onOpen, onSaveAll }) {
   let me = null;
   let filter = null;              // uid, or null for everyone
   let firstPaint = true;
+
+  let selecting = false;
+  const picked = new Set();       // bases
 
   // Presigning every thumbnail up front would be a thousand HMAC chains at
   // boot. Sign as tiles approach the viewport instead.
@@ -55,7 +60,10 @@ export function createGallery({ backend, seen, onOpen, onSaveAll }) {
     img.addEventListener('load', () => img.classList.add('loaded'));
 
     const tile = el('button', { class: 'tile', type: 'button' },
-      el('div', { class: 'shot' }, img, el('span', { class: 'mark' })),
+      el('div', { class: 'shot' },
+        img,
+        el('span', { class: 'mark' }),
+        el('span', { class: 'selbox' })),
       el('div', { class: 'frame' },
         el('span', { text: frameNo(rec.num) }),
         el('span', { class: 'fname', text: shortName(nameOf(users, rec.uid)) })));
@@ -65,8 +73,65 @@ export function createGallery({ backend, seen, onOpen, onSaveAll }) {
     tile._rec = rec;
     tile.setAttribute('aria-label',
       `Frame ${frameNo(rec.num)} by ${nameOf(users, rec.uid)}`);
-    tile.addEventListener('click', () => onOpen(rec));
+
+    // Long-press is the idiom people already know from their photo app, but
+    // it's undiscoverable on its own — hence the Select button in the header
+    // as well.
+    let timer = null;
+    let start = null;
+    let longPressed = false;
+
+    const cancel = () => { clearTimeout(timer); timer = null; };
+
+    tile.addEventListener('pointerdown', (e) => {
+      start = { x: e.clientX, y: e.clientY };
+      longPressed = false;
+      timer = setTimeout(() => {
+        longPressed = true;
+        if (!selecting) setSelecting(true);
+        toggle(rec);
+        navigator.vibrate?.(12);
+      }, LONG_PRESS_MS);
+    });
+    tile.addEventListener('pointermove', (e) => {
+      if (!start) return;
+      if (Math.hypot(e.clientX - start.x, e.clientY - start.y) > 10) cancel();
+    });
+    for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) {
+      tile.addEventListener(ev, cancel);
+    }
+
+    tile.addEventListener('click', () => {
+      if (longPressed) { longPressed = false; return; }   // the press already acted
+      if (selecting) toggle(rec);
+      else onOpen(rec);
+    });
     return tile;
+  }
+
+  // ── selection ────────────────────────────────────────────────────────────
+
+  function paintSelection(base) {
+    const tile = tiles.get(base);
+    if (tile) tile.dataset.sel = picked.has(base) ? 'on' : '';
+  }
+
+  function toggle(rec) {
+    if (picked.has(rec.base)) picked.delete(rec.base);
+    else picked.add(rec.base);
+    paintSelection(rec.base);
+    onSelect?.(selectedRecs());
+  }
+
+  const selectedRecs = () => recs.filter((r) => picked.has(r.base));
+
+  function setSelecting(on) {
+    selecting = on;
+    grid.classList.toggle('selecting', on);
+    if (!on) {
+      for (const base of picked) { picked.delete(base); paintSelection(base); }
+    }
+    onSelect?.(selectedRecs());
   }
 
   function renderChips() {
@@ -114,8 +179,9 @@ export function createGallery({ backend, seen, onOpen, onSaveAll }) {
 
     const n = pending().length;
     const btn = $('saveAllBtn');
-    btn.hidden = n === 0;
     btn.textContent = `↓ Save ${n}`;
+    // While selecting, the dock belongs to the selection actions.
+    if (!selecting) btn.hidden = n === 0;
 
     $('galEmpty').hidden = recs.length > 0;
   }
@@ -139,6 +205,7 @@ export function createGallery({ backend, seen, onOpen, onSaveAll }) {
     me = nextMe;
 
     tiles.clear();
+    picked.clear();
     io.disconnect();
 
     const frag = document.createDocumentFragment();
@@ -156,6 +223,7 @@ export function createGallery({ backend, seen, onOpen, onSaveAll }) {
     for (const tile of tiles.values()) io.observe(tile);
 
     firstPaint = false;
+    setSelecting(false);
     applyFilter();
     renderChips();
     renderHeader();
@@ -166,6 +234,25 @@ export function createGallery({ backend, seen, onOpen, onSaveAll }) {
     setFilter,
     pending,
     visible,
+
+    setSelecting,
+    selected: selectedRecs,
+    isSelecting: () => selecting,
+
+    /** Everything in the current view — so "select all" while filtered by a
+        person means that person's photos, which is what you meant. */
+    selectAll(on) {
+      const vis = visible();
+      for (const r of vis) {
+        if (on) picked.add(r.base); else picked.delete(r.base);
+        paintSelection(r.base);
+      }
+      onSelect?.(selectedRecs());
+    },
+    allSelected: () => {
+      const vis = visible();
+      return vis.length > 0 && vis.every((r) => picked.has(r.base));
+    },
 
     /** Re-read marks from seen state without rebuilding anything. */
     refresh() {
@@ -187,6 +274,7 @@ export function createGallery({ backend, seen, onOpen, onSaveAll }) {
     remove(base) {
       tiles.get(base)?.remove();
       tiles.delete(base);
+      picked.delete(base);
       // Frame numbers are positions in arrival order, so they close up.
       for (const tile of tiles.values()) {
         const f = tile.querySelector('.frame span');

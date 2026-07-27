@@ -115,7 +115,7 @@ every axis except one:
 | Revoke one album | delete + recreate the share | `photoshare revoke <slug>`, instant |
 | Revoke without breaking other albums | n/a | ✅ |
 | Can reach other albums / other data | folder only | prefix only, enforced by IAM |
-| Can delete files | yes | only until `--expires` lapses |
+| Can delete files | yes, anyone's | yes, anyone's — until `--expires` lapses |
 | Recoverable after a delete | no | only with versioning — **off** on this bucket |
 | Credential visible in URL | token | access key + secret |
 
@@ -132,7 +132,11 @@ Practical rules that follow:
 - **Base64 is encoding, not encryption.** Assume anyone with the URL can read
   the key in two seconds.
 - **Identity is self-asserted.** Anyone can claim to be anyone. Fine among
-  friends; just never build anything that depends on it being true.
+  friends; just never build anything that depends on it being true. In
+  particular the UI does **not** restrict deletion to your own photos (§7.2) —
+  a fence built on self-asserted identity would only be theatre, since the IAM
+  policy grants `s3:DeleteObject` across the whole prefix to every holder of
+  the link.
 - **Issue view-only links for people who only want to look**
   (`create --readonly-link`). Costs one extra IAM user and removes delete risk
   for most of the group.
@@ -879,11 +883,21 @@ ellipsis and no information.
 
 **Marks appear only where there's something to act on** — new and saved get a
 grease-pencil ring, the ordinary middle state stays clean. Saved beats new,
-since it's the terminal state.
+since it's the terminal state. The saved mark is reversible: *Unmark* in the
+lightbox, or on a selection, puts a photo back in the download queue.
 
-Tap opens a lightbox with the full-size image, swipe and arrow navigation, and
-*Save* / *Delete*. Delete is offered only on your own photos: a courtesy fence,
-not security — anyone with the link *can* delete anything (§2).
+Tap opens the lightbox. Long-press, or the *Select* control in the header,
+enters **selection mode**: tap tiles to pick, then *Save* / *Unmark* / *Delete*
+the lot. *Select all* takes everything in the current view, so filtering to one
+person and selecting all means that person's photos.
+
+**Delete applies to anyone's photo**, not just your own. The first build fenced
+it to your own uploads, but that fence protected nothing — everyone holding the
+link has `s3:DeleteObject` on the whole prefix regardless (§2), and among
+friends the realistic need is clearing someone's forty blurry shots after they
+have lost their identity. What guards it now is the confirmation, which names
+the uploader and says the deletion is permanent and silent. Honest friction
+beats a lock with no door.
 
 ### 7.3 Identity
 
@@ -961,9 +975,29 @@ and that Chrome can.
 
 **It is an OS behaviour, not a contract.** iOS regressed once before and could
 again. The fallback stays available: long-press the full-size image →
-*Add to Photos*, which always works and is what people do reflexively. `#lbImg`
-therefore keeps `-webkit-touch-callout: default` — do not set it to `none` to
-"clean up" the long-press menu.
+*Add to Photos*, which always works and is what people do reflexively. The
+lightbox slides therefore keep `-webkit-touch-callout: default` — do not set it
+to `none` to "clean up" the long-press menu. Grid thumbnails are the opposite
+(`none`), because there a long-press means "start selecting".
+
+### 7.6 Paging in the lightbox
+
+Swiping is a **native scroll-snap carousel**: a flex track with
+`scroll-snap-type: x mandatory`, one full-width slide per photo, and
+`scroll-snap-stop: always` so a hard flick advances one photo rather than four.
+
+The first version did the arithmetic by hand in a `touchend` listener, and it
+was wrong in two ways at once — the image did not move with the finger, it just
+cut to the next one, and the page won the axis fight, so a swipe scrolled
+vertically before it panned. `touch-action: pan-x` on the track settles the
+second point outright, and handing the gesture to the browser buys
+finger-tracking, momentum and end-of-list rubber-banding for nothing.
+
+Slides exist for every photo but only carry an `src` within ±2 of the current
+one, and anything past ±4 is unloaded again — a few dozen full-size decodes is
+how you crash mobile Safari (§8.3). The current index comes from
+`Math.round(scrollLeft / clientWidth)` on a settle-debounced scroll listener,
+which is also what keeps the metadata bar and the prefetched save-blob in step.
 
 **The gesture gotcha:** Safari requires `navigator.share()` to be called inside
 a user-gesture task. `await fetch(...)` first and the gesture is gone

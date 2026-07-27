@@ -66,14 +66,21 @@
 <!-- ── gallery ──────────────────────────────────────────────────────────── -->
 <section class="screen" id="scr-gallery">
   <header class="sheethead">
-    <div class="headtop">
+    <div class="headtop" id="headNormal">
       <h1 class="albumtitle" id="galTitle"></h1>
       <button class="who" id="whoBtn">
         <span class="swatch" id="whoSwatch"></span>
         <span class="whoname" id="whoName"></span>
       </button>
     </div>
-    <p class="meta" id="galMeta"></p>
+    <div class="headtop" id="headSelect" hidden>
+      <h1 class="albumtitle" id="selCount"></h1>
+      <button class="who" id="selCancel"><span class="whoname">Cancel</span></button>
+    </div>
+    <div class="meta">
+      <span id="galMeta"></span>
+      <button class="metabtn" id="selectBtn">Select</button>
+    </div>
   </header>
 
   <nav class="filters" id="filters" aria-label="Filter by person"></nav>
@@ -88,12 +95,17 @@
   <footer class="dock">
     <button class="btn save" id="saveAllBtn" hidden></button>
     <button class="fab" id="addBtn" aria-label="Add photos">+</button>
+    <div class="selacts" id="selActs" hidden>
+      <button class="btn" id="selSave">Save</button>
+      <button class="btn" id="selUnmark">Unmark</button>
+      <button class="btn danger" id="selDelete">Delete</button>
+    </div>
   </footer>
 </section>
 
 <!-- ── lightbox ─────────────────────────────────────────────────────────── -->
 <div class="lightbox" id="lightbox" hidden>
-  <img id="lbImg" alt="">
+  <div class="lbtrack" id="lbTrack"></div>
   <button class="lbclose" id="lbClose" aria-label="Close">✕</button>
   <button class="lbnav prev" id="lbPrev" aria-label="Previous">‹</button>
   <button class="lbnav next" id="lbNext" aria-label="Next">›</button>
@@ -106,7 +118,8 @@
     </div>
     <div class="lbacts">
       <button class="btn" id="lbSave">Save</button>
-      <button class="btn danger" id="lbDelete" hidden>Delete</button>
+      <button class="btn" id="lbUnmark" hidden>Unmark</button>
+      <button class="btn danger" id="lbDelete">Delete</button>
     </div>
   </div>
 </div>

@@ -1,4 +1,4 @@
-import { $, el, show, toast, taskSheet, plural } from './ui.js';
+import { $, el, show, toast, taskSheet, confirmSheet, plural } from './ui.js';
 import { albumFromLocation, albumFromText } from './album.js';
 import { s3Backend } from './backend-s3.js';
 import { parsePhotos, hashesOf, frameNo, downloadName } from './photos.js';
@@ -168,18 +168,18 @@ function buildGallery() {
       backend,
       seen: { isNew: (r, me) => seen.isNew(r, me), isSaved: (r) => seen.isSaved(r) },
       onOpen: (rec) => lightbox.open(gallery.visible(), rec),
+      onSelect: renderSelection,
     });
 
     lightbox = createLightbox({
       backend, album, ctx,
-      seen: { markSaved: (r) => seen.markSaved(r) },
-      onSaved: () => gallery.refresh(),
-      onDeleted: (rec) => {
-        recs = recs.filter((r) => r.base !== rec.base);
-        existing.delete(rec.hash);
-        recs.slice().reverse().forEach((r, i) => { r.num = i + 1; });
-        gallery.remove(rec.base);
+      seen: {
+        markSaved: (r) => seen.markSaved(r),
+        markUnsaved: (r) => seen.markUnsaved(r),
+        isSaved: (r) => seen.isSaved(r),
       },
+      onChanged: () => gallery.refresh(),
+      onDeleted: forget,
     });
 
     uploader = createUploader({
@@ -192,9 +192,23 @@ function buildGallery() {
     });
 
     $('addBtn').onclick = () => uploader.pick();
-    $('saveAllBtn').onclick = saveAll;
+    $('saveAllBtn').onclick = () => saveAll(gallery.pending());
     $('whoBtn').onclick = () => openIdentity({ returning: true });
     $('upClose').onclick = () => taskSheet.close();
+
+    $('selectBtn').onclick = () => {
+      if (!gallery.isSelecting()) gallery.setSelecting(true);
+      else gallery.selectAll(!gallery.allSelected());
+    };
+    $('selCancel').onclick = () => gallery.setSelecting(false);
+    $('selSave').onclick = () => saveAll(gallery.selected());
+    $('selUnmark').onclick = () => {
+      const n = seen.markUnsaved(gallery.selected());
+      gallery.setSelecting(false);
+      gallery.refresh();
+      toast(n ? `${plural(n, 'photo')} marked as not saved` : 'Nothing to unmark');
+    };
+    $('selDelete').onclick = deleteSelected;
   }
 
   $('galTitle').textContent = album.n;
@@ -202,11 +216,87 @@ function buildGallery() {
   gallery.render(recs, ctx.users, ctx.me);
 }
 
+// ── selection ────────────────────────────────────────────────────────────
+
+/** Drop a deleted photo from every structure that remembers it. */
+function forget(rec) {
+  recs = recs.filter((r) => r.base !== rec.base);
+  existing.delete(rec.hash);
+  recs.slice().reverse().forEach((r, i) => { r.num = i + 1; });
+  gallery.remove(rec.base);
+}
+
+function renderSelection(picked) {
+  const on = gallery.isSelecting();
+  $('headNormal').hidden = on;
+  $('headSelect').hidden = !on;
+  $('selActs').hidden = !on;
+  $('addBtn').hidden = on || album.readonly;
+  $('saveAllBtn').hidden = on || gallery.pending().length === 0;
+
+  $('selectBtn').textContent = !on ? 'Select'
+    : gallery.allSelected() ? 'Clear' : 'Select all';
+
+  if (!on) return;
+  $('selCount').textContent = picked.length
+    ? `${picked.length} selected`
+    : 'Tap photos to select';
+  for (const id of ['selSave', 'selUnmark', 'selDelete']) {
+    $(id).disabled = picked.length === 0;
+  }
+  $('selSave').textContent = canShareFiles() ? `Save ${picked.length || ''}`.trim()
+                                             : `Get ${picked.length || ''}`.trim();
+  $('selDelete').hidden = album.readonly;
+}
+
+async function deleteSelected() {
+  const picked = gallery.selected();
+  if (!picked.length) return;
+
+  const others = picked.filter((r) => r.uid !== ctx.me?.uid);
+  const names = [...new Set(others.map((r) => nameOf(ctx.users, r.uid)))];
+
+  const go = await confirmSheet({
+    title: `Delete ${plural(picked.length, 'photo')}?`,
+    body: others.length
+      ? `${plural(others.length, 'of them belongs', 'of them belong')} to ${names.join(', ')}. `
+        + 'Deleting removes them from the album for everyone, permanently, and nobody is told.'
+      : 'This removes them from the album for everyone, permanently — there are no older versions to fall back on.',
+    confirm: `Delete ${picked.length}`,
+    danger: true,
+  });
+  if (!go) return;
+
+  taskSheet.open({ title: 'Deleting', summary: `${plural(picked.length, 'photo')}…` });
+  let gone = 0;
+  let failed = 0;
+
+  for (const rec of picked) {
+    const set = taskSheet.row(`${frameNo(rec.num)} · ${nameOf(ctx.users, rec.uid)}`);
+    try {
+      await backend.remove(rec.key);
+      await backend.remove(rec.thumbKey);
+      forget(rec);
+      set('done', 'Deleted');
+      gone++;
+    } catch (e) {
+      set('fail', e.status === 403 ? 'Not allowed' : 'Failed');
+      failed++;
+    }
+  }
+
+  gallery.setSelecting(false);
+  taskSheet.summary(failed
+    ? `${gone} deleted, ${failed} could not be — the link may no longer be able to change the album.`
+    : `${plural(gone, 'photo')} deleted.`)
+    .action('Done', () => taskSheet.close());
+}
+
 // ── bulk save ────────────────────────────────────────────────────────────
 
-async function saveAll() {
-  const list = gallery.pending();
+async function saveAll(list) {
   if (!list.length) return;
+  gallery.setSelecting(false);
 
   const label = (r) => `${frameNo(r.num)} · ${nameOf(ctx.users, r.uid)}`;
 
