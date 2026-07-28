@@ -236,6 +236,7 @@ function renderSelection(picked) {
 
   $('selectBtn').textContent = !on ? 'Select'
     : gallery.allSelected() ? 'Clear' : 'Select all';
+  $('selectBtn').classList.toggle('on', on);
 
   if (!on) return;
   $('selCount').textContent = picked.length

@@ -316,21 +316,45 @@ textarea {
 }
 .meta b { color: var(--safelight); font-weight: 400; }
 
-/* Long-press already selects, but nobody discovers a long-press. */
+/* Long-press already selects, but nobody discovers a long-press — so this is
+   the discoverable route and has to look like a control, not a footnote. */
 .metabtn {
   flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: .45rem;
   appearance: none;
-  background: none;
-  border: 0;
-  padding: .2rem 0 .2rem .5rem;
-  font: inherit;
+  background: var(--sheet);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  min-height: 30px;
+  padding: .3rem .6rem;
+  font: 10px/1 var(--mono);
+  letter-spacing: .12em;
+  text-transform: uppercase;
   color: var(--ink);
-  text-decoration: underline;
-  text-underline-offset: 3px;
-  text-decoration-color: var(--rule);
   cursor: pointer;
 }
-.metabtn:hover { text-decoration-color: var(--ink-dim); }
+.metabtn::before {
+  content: "";
+  width: 11px;
+  height: 11px;
+  border: 1.5px solid currentColor;
+  border-radius: 2px;
+  opacity: .75;
+}
+.metabtn:hover { border-color: var(--ink-dim); }
+
+/* While selecting it becomes Select all / Clear, and says so in the accent. */
+.metabtn.on {
+  color: var(--safelight);
+  border-color: #5A3020;
+}
+.metabtn.on::before {
+  background: var(--safelight);
+  border-color: var(--safelight);
+  opacity: 1;
+}
 
 /* ── filters: scrolls inside itself, never the page ───────────────────── */
 
@@ -482,6 +506,12 @@ textarea {
   -webkit-touch-callout: none;
   -webkit-user-select: none;
   user-select: none;
+}
+/* A long-press here means "start selecting", so nothing may hijack it: no OS
+   callout, no text selection, and no native image drag. */
+.tile img {
+  -webkit-user-drag: none;
+  user-drag: none;
 }
 
 .selbox {

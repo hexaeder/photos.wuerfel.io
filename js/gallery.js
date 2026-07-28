@@ -56,7 +56,12 @@ export function createGallery({ backend, seen, onOpen, onSelect }) {
   }
 
   function makeTile(rec) {
-    const img = el('img', { decoding: 'async', alt: '' });
+    // draggable=false plus a dragstart guard: without them a long-press starts
+    // the browser's native image drag, which lifts the <img> into its own
+    // compositing layer above everything — so the selection ring and the
+    // highlighted border disappear underneath the thing being dragged.
+    const img = el('img', { decoding: 'async', alt: '', draggable: 'false' });
+    img.addEventListener('dragstart', (e) => e.preventDefault());
     img.addEventListener('load', () => img.classList.add('loaded'));
 
     const tile = el('button', { class: 'tile', type: 'button' },
@@ -133,6 +138,15 @@ export function createGallery({ backend, seen, onOpen, onSelect }) {
     }
     onSelect?.(selectedRecs());
   }
+
+  // Tapping the empty sheet around the photos leaves selection mode — the same
+  // way tapping away dismisses anything else. Controls are excluded, or the
+  // Cancel button would fight this handler for the same tap.
+  document.addEventListener('click', (e) => {
+    if (!selecting) return;
+    if (e.target.closest('.tile, .sheethead, .dock, .filters, .sheet, .lightbox')) return;
+    setSelecting(false);
+  });
 
   function renderChips() {
     const counts = new Map();

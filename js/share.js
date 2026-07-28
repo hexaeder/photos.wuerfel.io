@@ -93,7 +93,14 @@ export async function downloadAll(urls) {
   }
 }
 
-/** Why file-saving is unavailable, in words a person can act on. */
+/**
+ * Why file-saving is unavailable, in words a person can act on.
+ *
+ * Naming browsers is worth the specificity: the ones that work are the
+ * Chromium-based ones. Firefox for Android is the trap — it *has*
+ * `navigator.share`, so it looks supported, but it cannot share files, so it
+ * lands here too.
+ */
 export const noShareReason = () => isTouch()
-  ? 'This browser can’t hand photos to your gallery app, so they download to your Downloads folder instead. Chrome and Samsung Internet can save straight to Photos.'
+  ? 'This browser can’t hand photos to your gallery, so they go to Downloads — look for a “Download” album. Chrome, Brave, Edge and Samsung Internet save straight to Photos. Firefox can’t either.'
   : 'Downloading to this computer.';

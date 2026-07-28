@@ -889,7 +889,26 @@ lightbox, or on a selection, puts a photo back in the download queue.
 Tap opens the lightbox. Long-press, or the *Select* control in the header,
 enters **selection mode**: tap tiles to pick, then *Save* / *Unmark* / *Delete*
 the lot. *Select all* takes everything in the current view, so filtering to one
-person and selecting all means that person's photos.
+person and selecting all means that person's photos. Tapping the empty sheet
+around the photos leaves selection mode.
+
+Three things have to be suppressed on a thumbnail for long-press to mean
+"select", and missing any one of them breaks it in a different way:
+
+| | Without it |
+|---|---|
+| `-webkit-touch-callout: none` | the OS context menu opens instead |
+| `user-select: none` | the press starts a text selection |
+| `draggable="false"` + `-webkit-user-drag: none` | the browser starts a native image drag |
+
+The last one is the subtle one, and it was a real bug: dragging lifts the
+`<img>` into its own compositing layer **above** the tile's own chrome, so the
+selection ring and highlighted border vanish underneath the image being
+dragged. It looks like the selection failed when in fact it worked. A
+`dragstart` handler calling `preventDefault()` backs up the CSS.
+
+The lightbox is deliberately the opposite — its images keep the callout, since
+long-press → *Add to Photos* is the fallback when Web Share is missing (§7.5).
 
 **Delete applies to anyone's photo**, not just your own. The first build fenced
 it to your own uploads, but that fence protected nothing — everyone holding the
@@ -947,12 +966,36 @@ landed in the photo library.
 sheet with a real "Save to Photos" target, multiple files per call. Samsung
 Internet and Edge are Chromium too, so they behave the same.
 
-**Android, everything else — no Web Share at all.** Found the hard way on a
+**Android, everything else — mostly no file sharing.** Found the hard way on a
 Fairphone running DuckDuckGo, 2026-07-27: bulk save produced *one* file, in
-Downloads, named after a blob UUID. DuckDuckGo's Android browser — like most
-non-Chrome Android browsers — is built on Android WebView, and **WebView does
-not expose `navigator.share`**. So the code fell to the desktop download path,
-where two further things break:
+Downloads, named after a blob UUID.
+
+Confirmed against the compatibility data rather than assumed:
+
+| Runtime | `navigator.share` | Files (Level 2) |
+|---|---|---|
+| Chrome, Brave, Edge, Samsung Internet (Android) | ✅ 61+ | ✅ |
+| Safari (iOS) | ✅ 12.2+ | ✅ 14+ |
+| iOS WKWebView | ✅ | ✅ |
+| **Android WebView** | ❌ **absent entirely** | ❌ |
+| **Firefox for Android** | ✅ 79+ | ❌ **no file support** |
+| Windows WebView2 | ❌ | ❌ |
+
+Two things in that table drive the design.
+
+**Android WebView has no Web Share at all** — not Level 2, not even Level 1
+([caniwebview][caniwebview], data current to 2026-07-25, which lists
+`api.Navigator.share` and its `files` and `text` parameters all as unsupported).
+And DuckDuckGo's Android browser is [WebView-based by design][ddg-webview]: it
+deliberately uses the OS rendering engine instead of bundling Chromium. So this
+is a property of the browser, not of the Fairphone or of any setting.
+
+**Firefox for Android is the trap.** It *has* `navigator.share` (79+), so a
+naive `if (navigator.share)` check passes — but it [cannot share files][ffshare].
+Probing with `canShare({ files: [probeFile] })` is what catches it; probing
+`navigator.share` alone would produce a confident failure at the worst moment.
+
+Falling through to the download path then breaks twice more:
 
 - `<a download>` is ignored, so the filename comes from the `blob:` URL — hence
   the UUID.
@@ -970,8 +1013,14 @@ downloads straight from Wasabi.
 And bulk download **steps one tap at a time on touch devices** (`isTouch()`,
 i.e. `maxTouchPoints` or `pointer: coarse`) rather than firing a queue that
 will be thrown away. Tedious for twenty photos, but every photo actually
-arrives, and the sheet says plainly that this browser can't reach the gallery
-and that Chrome can.
+arrives.
+
+There is no code fix for the gallery half — a page cannot reach the photo
+library without Web Share, and no permission or flag changes that. So the sheet
+names the browsers that do work, and names Firefox as one that doesn't, since
+"try another browser" otherwise sends people to the one alternative that fails
+the same way. Photos landing in Downloads usually surface under a *Download*
+album in the gallery app, which is worth saying out loud.
 
 **It is an OS behaviour, not a contract.** iOS regressed once before and could
 again. The fallback stays available: long-press the full-size image →
@@ -1231,3 +1280,6 @@ Two things worth knowing before you build:
 [ios16]: https://developer.apple.com/forums/thread/729782
 [`aws4fetch`]: https://github.com/mhart/aws4fetch
 [Preact]: https://preactjs.com/
+[caniwebview]: https://caniwebview.com/features/web-feature-share/
+[ddg-webview]: https://github.com/orgs/privacyguides/discussions/414
+[ffshare]: https://developer.mozilla.org/en-US/docs/Web/API/Navigator/share
