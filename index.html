@@ -9,7 +9,7 @@
 
 <!-- data-version: bump by hand on every deploy. index.html is what browsers
      revalidate soonest, so it's the most honest place to stamp it from. -->
-<body data-screen="boot" data-version="v2026-07-28g">
+<body data-screen="boot" data-version="v2026-07-28h">
 
 <!-- ── boot ────────────────────────────────────────────────────────────── -->
 <section class="screen" id="scr-boot">
@@ -90,6 +90,18 @@
   </header>
 
   <nav class="filters" id="filters" aria-label="Filter by person"></nav>
+
+  <!-- First-run legend. It names three controls that are on screen *right now*,
+       which is the only reason a new arrival reads it — see syncIntro(). -->
+  <aside class="intro" id="intro" hidden>
+    <button class="introx" id="introClose" aria-label="Dismiss">✕</button>
+    <p class="introhead" id="introHead"></p>
+    <dl class="introkeys">
+      <div id="introAdd"><dt>+</dt><dd>add photos from this device</dd></div>
+      <div><dt>↓ Save</dt><dd>the ones you haven’t saved yet — it keeps track</dd></div>
+      <div><dt>Select</dt><dd>pick out specific frames</dd></div>
+    </dl>
+  </aside>
 
   <div class="grid" id="grid"></div>
 

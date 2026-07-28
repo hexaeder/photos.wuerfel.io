@@ -985,6 +985,23 @@ so the control should state the current order without being tapped; and the
 first version borrowed `.metabtn` from Select, whose `::before` square made it
 read as a second checkbox sitting next to the real one.
 
+**A three-line legend sits above the grid on a first visit** (`photoshare.intro`,
+dismissed for good by its ✕). The app's two least obvious ideas are that `↓ Save
+12` means *the twelve you don't have yet* — `pending()` already subtracts what
+`seen` knows you saved and everything you uploaded — and that the whole point is
+camera roll to camera roll rather than files handled by hand in between. Neither
+survives being inferred from a number in the dock.
+
+It is a legend and not an introduction, and the distinction is the only reason
+it gets read: every row is keyed by a glyph visible on the same screen (`+`,
+`↓ Save`, `Select`), so it parses as a caption for what's already there instead
+of documentation to be skipped. Three rows is the budget. It follows the same
+branches the controls do — no `+` row on a read-only link, and the headline
+promises the camera roll only where `canSaveToGallery()` is true — because a
+legend that names a control the reader can't see is worse than none. An empty
+album is left to `galEmpty` instead. The flag is per *device*, not per album:
+it explains the app, and whoever opens a second album has already read it.
+
 Re-sorting reuses the build-once trick: appending an already-attached node
 *moves* it, so reordering the whole grid is one `append` call and every loaded
 thumbnail, presigned URL and selection survives it.

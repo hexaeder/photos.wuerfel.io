@@ -611,6 +611,67 @@ textarea {
   white-space: nowrap;
 }
 
+/* ── first-run legend ─────────────────────────────────────────────────────
+   A legend, not an introduction: a term/description list keyed by the literal
+   glyphs on the controls below it, so it's read as a caption for the screen
+   rather than as documentation. Three rows is the budget — a fourth turns it
+   into something to skip. */
+
+.intro {
+  position: relative;
+  margin: 0 var(--pad) .9rem;
+  padding: .8rem .9rem;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  background: var(--sheet);
+}
+.introhead {
+  margin: 0 0 .7rem;
+  padding-right: 1.6rem;         /* clear of the ✕ */
+  font: 10px/1.4 var(--mono);
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--safelight);
+}
+.introkeys {
+  margin: 0;
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: .45rem .7rem;
+  align-items: baseline;
+}
+/* The row wrapper exists only so a whole row can be hidden at once; it must not
+   introduce a box between the grid and its dt/dd. */
+.introkeys > div { display: contents; }
+.introkeys dt {
+  min-width: 0;
+  font: 10px/1.5 var(--mono);
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--ink);
+  white-space: nowrap;
+}
+.introkeys dd {
+  margin: 0;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--ink-dim);
+}
+.introx {
+  position: absolute;
+  top: .2rem;
+  right: .2rem;
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: .45rem .55rem;
+  font: 12px/1 var(--mono);
+  color: var(--ink-dim);
+  cursor: pointer;
+}
+.introx:hover { color: var(--ink); }
+
 .empty {
   padding: 3.5rem var(--pad);
   text-align: center;

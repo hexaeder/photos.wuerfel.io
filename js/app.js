@@ -38,6 +38,12 @@ let myPhotos = {};
 const SORT_KEY = 'photoshare.sort';
 const loadSort = () => (localStorage.getItem(SORT_KEY) === 'taken' ? 'taken' : 'added');
 
+// Whether the first-run legend has been dismissed — same class of preference,
+// and losing it only means the card appears once more. It's deliberately not
+// per-album: the legend explains the app, and someone who opens a second album
+// has already learnt it.
+const INTRO_KEY = 'photoshare.intro';
+
 // ── error messages that say what to do ───────────────────────────────────
 
 function explain(e) {
@@ -168,6 +174,25 @@ function syncSort() {
   gallery.setSort(mode);
 }
 
+/**
+ * The three-line legend above the grid.
+ *
+ * It works by naming controls the reader can see, so it has to agree with what
+ * those controls actually say: the `+` row goes on a read-only link, and the
+ * headline promises the camera roll only where `canSaveToGallery()` can deliver
+ * it. An empty album is left to `galEmpty` — two of the three rows would point
+ * at buttons that aren't there yet.
+ */
+function syncIntro() {
+  const box = $('intro');
+  box.hidden = localStorage.getItem(INTRO_KEY) === 'done' || recs.length === 0;
+  if (box.hidden) return;
+  $('introAdd').hidden = album.readonly;
+  $('introHead').textContent = canSaveToGallery()
+    ? 'Camera roll in, camera roll out'
+    : 'Photos in, full quality out';
+}
+
 async function start(me) {
   const renamed = ctx.users.get(me.uid)?.name !== me.name;
   const switched = ctx.me && ctx.me.uid !== me.uid;
@@ -246,6 +271,7 @@ function buildGallery() {
       // Once per batch, never per photo — see writeUser().
       onDone: () => {
         syncSort();               // the batch may be the first to carry dates
+        syncIntro();              // …and may have been the album's first photos
         if (album.readonly) return;
         saveMyRecord().catch(() => {
           toast('Photos are up, but their dates could not be saved.', 'bad');
@@ -259,6 +285,10 @@ function buildGallery() {
       if (!mode || mode === loadSort()) return;
       localStorage.setItem(SORT_KEY, mode);
       syncSort();
+    };
+    $('introClose').onclick = () => {
+      localStorage.setItem(INTRO_KEY, 'done');
+      syncIntro();
     };
     $('saveAllBtn').onclick = () => saveAll(gallery.pending());
     $('whoBtn').onclick = () => openIdentity({ returning: true });
@@ -283,6 +313,7 @@ function buildGallery() {
   $('addBtn').hidden = album.readonly;
   gallery.render(recs, ctx.users, ctx.me);
   syncSort();
+  syncIntro();
 }
 
 // ── selection ────────────────────────────────────────────────────────────
@@ -293,6 +324,7 @@ function forget(rec) {
   existing.delete(rec.hash);
   recs.slice().reverse().forEach((r, i) => { r.num = i + 1; });
   gallery.remove(rec.base);
+  syncIntro();                      // may have emptied the album
 
   // Its capture date goes too, if it was ours to assert. Not urgent enough to
   // write immediately — the next upload or rename carries it, and a stale entry
