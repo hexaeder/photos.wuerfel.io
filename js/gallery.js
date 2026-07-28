@@ -199,11 +199,17 @@ export function createGallery({ backend, seen, onOpen, onSelect, sort = 'added' 
     }
     $('galMeta').replaceChildren(...parts);
 
+    // Nothing to save disables the button rather than removing it: it's the
+    // control the whole app is built around, and a dock that grows and shrinks
+    // as you save, filter or upload is harder to read than a greyed-out zero.
+    // Staying put also keeps the legend's `↓ Save` row pointing at something.
     const n = pending().length;
     const btn = $('saveAllBtn');
     btn.textContent = `↓ Save ${n}`;
-    // While selecting, the dock belongs to the selection actions.
-    if (!selecting) btn.hidden = n === 0;
+    btn.disabled = n === 0;
+    // While selecting, the dock belongs to the selection actions; an album with
+    // no frames at all has nothing for it to mean yet.
+    if (!selecting) btn.hidden = recs.length === 0;
 
     $('galEmpty').hidden = recs.length > 0;
   }

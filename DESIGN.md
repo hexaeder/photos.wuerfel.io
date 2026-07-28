@@ -985,12 +985,12 @@ so the control should state the current order without being tapped; and the
 first version borrowed `.metabtn` from Select, whose `::before` square made it
 read as a second checkbox sitting next to the real one.
 
-**A three-line legend sits above the grid on a first visit** (`photoshare.intro`,
-dismissed for good by its ✕). The app's two least obvious ideas are that `↓ Save
-12` means *the twelve you don't have yet* — `pending()` already subtracts what
-`seen` knows you saved and everything you uploaded — and that the whole point is
-camera roll to camera roll rather than files handled by hand in between. Neither
-survives being inferred from a number in the dock.
+**A three-line legend sits above the grid on every visit.** The app's two least
+obvious ideas are that `↓ Save 12` means *the twelve you don't have yet* —
+`pending()` already subtracts what `seen` knows you saved and everything you
+uploaded — and that the whole point is camera roll to camera roll rather than
+files handled by hand in between. Neither survives being inferred from a number
+in the dock.
 
 It is a legend and not an introduction, and the distinction is the only reason
 it gets read: every row is keyed by a glyph visible on the same screen (`+`,
@@ -999,8 +999,30 @@ of documentation to be skipped. Three rows is the budget. It follows the same
 branches the controls do — no `+` row on a read-only link, and the headline
 promises the camera roll only where `canSaveToGallery()` is true — because a
 legend that names a control the reader can't see is worse than none. An empty
-album is left to `galEmpty` instead. The flag is per *device*, not per album:
-it explains the app, and whoever opens a second album has already read it.
+album is left to `galEmpty` instead.
+
+**The ✕ lasts for the visit, not forever** (`introHidden`, a plain module
+variable, deliberately not stored). The two dismissal models cost different
+things. Remembering it permanently buys back ~90px once and then owes the
+reader a way to undo it — and the only honest place for that control, the
+header beside Select, would cost every visit more than the card does. Forgetting
+it costs a few hundred pixels on each load and nothing else, because the card is
+cheap to re-read and a reload is a recovery path everyone already has. So the
+✕ means "not now", the state it clears is the one people actually want cleared
+— *this screen is in my way* — and there is no third control to explain.
+
+**`↓ Save 0` greys out; it does not leave the dock.** Once the legend is
+permanent this stops being cosmetic: having nothing left to save is the steady
+state for anyone returning to an album they've been through, and it's permanent
+in an album where you're the only uploader, since `pending()` subtracts your own
+photos too. A row captioning a button that isn't there — or was never there —
+is the failure the glyph-keying was supposed to prevent. Keeping the button
+disabled fixes that and is better on its own terms: the dock stops reflowing
+every time you save, filter or upload, and a greyed zero answers "how many do I
+still need?" where an absent button leaves you to guess. The label stays
+`↓ Save <n>` at zero rather than switching to *All saved*, which would be a lie
+in the only-uploader case. It still hides entirely while selecting (the dock
+belongs to the selection actions) and on a genuinely empty album.
 
 Re-sorting reuses the build-once trick: appending an already-attached node
 *moves* it, so reordering the whole grid is one `append` call and every loaded

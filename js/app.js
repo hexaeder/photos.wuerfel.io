@@ -38,11 +38,12 @@ let myPhotos = {};
 const SORT_KEY = 'photoshare.sort';
 const loadSort = () => (localStorage.getItem(SORT_KEY) === 'taken' ? 'taken' : 'added');
 
-// Whether the first-run legend has been dismissed — same class of preference,
-// and losing it only means the card appears once more. It's deliberately not
-// per-album: the legend explains the app, and someone who opens a second album
-// has already learnt it.
-const INTRO_KEY = 'photoshare.intro';
+// The legend's ✕ lasts for this visit and no longer — deliberately not stored.
+// Persisting it would mean owing the reader a way to bring it back, and a
+// permanent control in the header costs every visit more than the card does;
+// a reload is a recovery path everyone already has. It's cheap enough to
+// re-read and it goes the moment it's in the way, which is the whole bargain.
+let introHidden = false;
 
 // ── error messages that say what to do ───────────────────────────────────
 
@@ -178,19 +179,21 @@ function syncSort() {
  * The three-line legend above the grid.
  *
  * It works by naming controls the reader can see, so it has to agree with what
- * those controls actually say: the `+` row goes on a read-only link, and the
- * headline promises the camera roll only where `canSaveToGallery()` can deliver
- * it. An empty album is left to `galEmpty` — two of the three rows would point
- * at buttons that aren't there yet.
+ * those controls actually say: no `+` row on a read-only link, and the headline
+ * promises the camera roll only where `canSaveToGallery()` can deliver it. The
+ * `↓ Save` row is unconditional because its button now is too — it greys out at
+ * zero instead of leaving the dock, so the row always has something to caption.
+ * An empty album is left to `galEmpty` instead.
  */
 function syncIntro() {
   const box = $('intro');
-  box.hidden = localStorage.getItem(INTRO_KEY) === 'done' || recs.length === 0;
+  box.hidden = introHidden || recs.length === 0;
   if (box.hidden) return;
   $('introAdd').hidden = album.readonly;
-  $('introHead').textContent = canSaveToGallery()
-    ? 'Camera roll in, camera roll out'
-    : 'Photos in, full quality out';
+  const roll = canSaveToGallery();
+  $('introHead').textContent = album.readonly
+    ? (roll ? 'Straight to your camera roll' : 'Full quality, straight out')
+    : (roll ? 'Camera roll in, camera roll out' : 'Photos in, full quality out');
 }
 
 async function start(me) {
@@ -287,7 +290,7 @@ function buildGallery() {
       syncSort();
     };
     $('introClose').onclick = () => {
-      localStorage.setItem(INTRO_KEY, 'done');
+      introHidden = true;
       syncIntro();
     };
     $('saveAllBtn').onclick = () => saveAll(gallery.pending());
@@ -341,7 +344,7 @@ function renderSelection(picked) {
   $('headSelect').hidden = !on;
   $('selActs').hidden = !on;
   $('addBtn').hidden = on || album.readonly;
-  $('saveAllBtn').hidden = on || gallery.pending().length === 0;
+  $('saveAllBtn').hidden = on || recs.length === 0;
 
   $('selectBtn').textContent = !on ? 'Select'
     : gallery.allSelected() ? 'Clear' : 'Select all';

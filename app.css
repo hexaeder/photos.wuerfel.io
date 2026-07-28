@@ -611,7 +611,7 @@ textarea {
   white-space: nowrap;
 }
 
-/* ── first-run legend ─────────────────────────────────────────────────────
+/* ── legend ───────────────────────────────────────────────────────────────
    A legend, not an introduction: a term/description list keyed by the literal
    glyphs on the controls below it, so it's read as a caption for the screen
    rather than as documentation. Three rows is the budget — a fourth turns it
