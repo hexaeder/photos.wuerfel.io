@@ -547,7 +547,7 @@ $ ./tools/photoshare.py create "Norway 2026"
 created album 'norway-2026' (Norway 2026)
 
   upload+view link:
-  https://photos.wuerfel.io/#a=eyJ2IjoxLCJ0IjoiczMi...
+  https://photos.wuerfel.io/#norway-2026.WQ4T1XJ8HZ2M9K3PR6VB.uY7k...
 
   The secret is in the link and is not stored anywhere else.
   Lost it? `photoshare.py link norway-2026` issues a new one.
@@ -567,6 +567,7 @@ Paste the link into the group chat. Done.
 | `create --expires 30d` | Upload window (default 30d; `never` to disable) | free |
 | `create --readonly-link` | Additionally mint a view-only link | free |
 | `create --save` | Also store the link in 1Password | free |
+| `create --long` | Emit the old self-contained link form (§5.2) | free |
 | `extend <slug> 30d` | Move the upload deadline; **link keeps working** | free |
 | `link <slug>` | Re-issue (rotates key, **kills the old link**) | free |
 | `revoke <slug>` | Delete IAM users → all links dead, photos kept | free, reversible |
@@ -676,7 +677,30 @@ same photos constantly.
 ### 5.2 The album link
 
 ```
-https://photos.wuerfel.io/#a=<base64url(JSON)>
+https://photos.wuerfel.io/#<slug>.<keyid>.<secret>[.r]        100 chars
+```
+
+Of those 100, **60 are the credential** — a 20-character access key id and a
+40-character secret — and that part is irreducible. Everything else the app
+reconstructs:
+
+| Dropped | Recovered from |
+|---|---|
+| `ep` | `https://s3.{region}.wasabisys.com` |
+| `rg`, `b` | constants in `js/album.js`, mirrored in the CLI (see below) |
+| `p` | `albums/<slug>/` |
+| `n` | `album.json`, read on connect — so the title survives a rename |
+| `v`, `t` | positional: three dot-separated fields *is* the format |
+
+There is deliberately **no base64 here**. The secret is the only field that can
+contain URL-hostile characters (Wasabi secrets routinely have `/` and `+`), and
+mapping those two to `-` and `_` costs nothing, where encoding the whole
+payload would add a third on top of it. A trailing `.r` marks a view-only link.
+
+**The long form is still live**, and not only for old links:
+
+```
+https://photos.wuerfel.io/#a=<base64url(JSON)>                ~330 chars
 ```
 
 ```json
@@ -692,16 +716,26 @@ https://photos.wuerfel.io/#a=<base64url(JSON)>
 }
 ```
 
-`ro` is present only on view-only links (`--readonly-link`, `link --readonly`).
-It lets the app hide the upload and delete controls up front rather than
+It carries the bucket and region explicitly, so it is what `make_link` emits
+whenever the compact form would be wrong or unparseable — a config naming a
+different bucket, a hand-passed `--slug` with a space in it, a secret outside
+the expected charset — as well as on `--long`. **The fallback is automatic**,
+which is the point: the compact form is an optimisation, and it is not allowed
+to be the reason a link fails at the far end of a group chat. `js/album.js`
+accepts both and always will; the long decoder is permanent, not a migration.
+
+The one real cost is that `SITE_BUCKET`/`SITE_REGION` in `tools/photoshare.py`
+and `SITE` in `js/album.js` must agree. They are commented as mirrors of each
+other, and a *config* pointing elsewhere degrades safely to the long form — the
+only way to get a wrong link is to edit one constant and not the other.
+
+`ro` lets the app hide the upload and delete controls up front rather than
 letting people discover the restriction by hitting a 403. The IAM policy is
 still what enforces it — the flag only saves a wasted tap, so a link with a
 forged `ro: 0` gains nothing.
 
-Base64url is required, not cosmetic: Wasabi secrets routinely contain `/` and
-`+`, which would corrupt a plain-base64 fragment. Decode through `TextDecoder`
-rather than trusting `atob`'s byte-per-char output, so album titles with
-umlauts survive:
+In the long form, decode through `TextDecoder` rather than trusting `atob`'s
+byte-per-char output, so album titles with umlauts survive:
 
 ```js
 const decodeAlbum = (s) => {
@@ -711,6 +745,9 @@ const decodeAlbum = (s) => {
     Uint8Array.from(bin, (c) => c.charCodeAt(0))));
 };
 ```
+
+The compact form sidesteps that problem rather than solving it: no non-ASCII
+ever rides in the link, because the title no longer does.
 
 ---
 

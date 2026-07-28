@@ -1,5 +1,5 @@
 import { $, el, show, toast, taskSheet, confirmSheet, plural } from './ui.js';
-import { albumFromLocation, albumFromText } from './album.js';
+import { albumFromLocation, albumFromText, fragmentFromText } from './album.js';
 import { s3Backend } from './backend-s3.js';
 import { parsePhotos, hashesOf, frameNo, downloadName } from './photos.js';
 import {
@@ -428,15 +428,20 @@ async function openAlbum(a) {
 
   backend = s3Backend(album);
 
-  let entries;
+  let entries, meta;
   try {
-    [entries, ctx.users] = await Promise.all([
+    [entries, ctx.users, meta] = await Promise.all([
       backend.list('photos/'),
       loadUsers(backend).catch(() => new Map()),
+      // A compact link carries no title, so the album's own record is where it
+      // comes from. Never fatal: the slug is already a usable name, and an
+      // album that predates album.json should still open.
+      backend.getJSON('album.json').catch(() => null),
     ]);
   } catch (e) {
     return showLink(explain(e));
   }
+  if (meta?.title) album.n = meta.title;
 
   recs = parsePhotos(entries);
   existing = hashesOf(recs);
@@ -456,7 +461,7 @@ $('linkGo').onclick = () => {
     return showLink(e.message);
   }
   // Put the link in the address bar so a reload keeps working.
-  history.replaceState(null, '', `#a=${/[#&]a=([A-Za-z0-9\-_]+)/.exec($('linkInput').value)[1]}`);
+  history.replaceState(null, '', fragmentFromText($('linkInput').value));
   openAlbum(a);
 };
 

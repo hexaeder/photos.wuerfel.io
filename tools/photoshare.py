@@ -65,6 +65,18 @@ CONFIG_CANDIDATES = (
 ALBUM_ROOT = "albums/"
 USER_PREFIX = "ps-"
 
+# The deployed web app assumes this bucket and region, so a link aimed at them
+# can leave both out (see make_link). These two lines are mirrored in
+# js/album.js — change one and you must change the other. Getting it wrong is
+# not silent: a config pointing anywhere else falls back to the long link form,
+# which carries the bucket and region explicitly.
+SITE_BUCKET = "photoshare-wuerfel"
+SITE_REGION = "eu-central-2"
+
+# Must stay in step with COMPACT in js/album.js — this is the shape that side
+# will accept.
+COMPACT_LINK = re.compile(r"[a-z0-9][a-z0-9-]*\.[A-Za-z0-9]{16,}\.[A-Za-z0-9_-]{20,}(\.r)?")
+
 # Wasabi's IAM endpoint is global and always signs against us-east-1.
 IAM_ENDPOINT = "https://iam.wasabisys.com"
 IAM_REGION = "us-east-1"
@@ -309,9 +321,47 @@ def policy_expiry(user: str) -> str | None:
 
 
 def make_link(
-    slug: str, title: str, access_key: str, secret_key: str, readonly: bool = False
+    slug: str,
+    title: str,
+    access_key: str,
+    secret_key: str,
+    readonly: bool = False,
+    long: bool = False,
 ) -> str:
+    """
+    Mint an album URL.
+
+    Two forms, both understood by the app (js/album.js):
+
+      compact   #<slug>.<keyid>.<secret>[.r]      ~100 chars
+      long      #a=<base64url(JSON)>              ~330 chars
+
+    The compact form drops everything the app can reconstruct — endpoint from
+    region, region and bucket from SITE_*, prefix from the slug, title from
+    album.json — leaving only the 60 characters of credential that genuinely
+    cannot be shortened. It needs no base64: the secret is the one field that
+    can contain URL-hostile characters, and swapping its two offenders is
+    cheaper than inflating the whole payload by a third.
+
+    The long form is the escape hatch for a deployment against some other
+    bucket, which is why the fallback below is automatic rather than a flag you
+    have to remember.
+    """
     cfg = config()
+    base = cfg["site"].rstrip("/")
+
+    if not long and cfg["bucket"] == SITE_BUCKET and cfg["region"] == SITE_REGION:
+        # Wasabi secrets are base64-ish and routinely contain '/' and '+', which
+        # a bare fragment cannot carry. The map is reversed in js/album.js.
+        secret = secret_key.replace("+", "-").replace("/", "_")
+        compact = f"{slug}.{access_key}.{secret}{'.r' if readonly else ''}"
+        # Belt and braces: --slug is whatever the caller typed, and Wasabi has
+        # never promised a charset for its secrets. Emitting a compact link the
+        # app cannot parse would fail at the far end of a group chat, so hand
+        # anything unexpected to the long form, which encodes arbitrary bytes.
+        if COMPACT_LINK.fullmatch(compact):
+            return f"{base}/#{compact}"
+
     payload = {
         "v": 1,
         "t": "s3",
@@ -331,7 +381,7 @@ def make_link(
     blob = base64.urlsafe_b64encode(
         json.dumps(payload, separators=(",", ":")).encode()
     ).decode().rstrip("=")
-    return f"{cfg['site'].rstrip('/')}/#a={blob}"
+    return f"{base}/#a={blob}"
 
 
 def iter_objects(prefix: str):
@@ -507,7 +557,7 @@ def cmd_create(args):
     write_until = iso_z(datetime.now(timezone.utc) + delta) if delta else None
 
     access_key, secret_key = provision_user(slug, readonly=False, write_until=write_until)
-    link = make_link(slug, title, access_key, secret_key)
+    link = make_link(slug, title, access_key, secret_key, long=args.long)
 
     print(f"created album {slug!r} ({title})\n")
     print(f"  upload+view link:\n  {link}\n")
@@ -520,7 +570,8 @@ def cmd_create(args):
 
     if args.readonly_link:
         ro_key, ro_secret = provision_user(slug, readonly=True)
-        print(f"  view-only link:\n  {make_link(slug, title, ro_key, ro_secret, readonly=True)}\n")
+        ro_link = make_link(slug, title, ro_key, ro_secret, readonly=True, long=args.long)
+        print(f"  view-only link:\n  {ro_link}\n")
 
     if args.save:
         subprocess.run(
@@ -543,7 +594,8 @@ def cmd_link(args):
 
     confirm(f"Re-issuing rotates the key and breaks the existing link for {slug!r}. Continue?")
     access_key, secret_key = provision_user(slug, readonly=args.readonly)
-    print(f"\n  {make_link(slug, title, access_key, secret_key, readonly=args.readonly)}\n")
+    link = make_link(slug, title, access_key, secret_key, readonly=args.readonly, long=args.long)
+    print(f"\n  {link}\n")
     print("  The previous link is now dead.")
 
 
@@ -1004,6 +1056,10 @@ def main():
     c.add_argument("--readonly-link", action="store_true", help="also mint a view-only link")
     c.add_argument("--save", action="store_true", help="store the link in 1Password")
     c.add_argument(
+        "--long", action="store_true",
+        help="emit the old self-contained link form (carries bucket and region)",
+    )
+    c.add_argument(
         "--expires", default="30d",
         help="upload window, e.g. 30d / 6w / never (default: 30d). Viewing never expires.",
     )
@@ -1026,6 +1082,10 @@ def main():
     c = sub.add_parser("link", help="re-issue an album link (rotates the key)")
     c.add_argument("slug")
     c.add_argument("--readonly", action="store_true")
+    c.add_argument(
+        "--long", action="store_true",
+        help="emit the old self-contained link form (carries bucket and region)",
+    )
     c.set_defaults(fn=cmd_link)
 
     c = sub.add_parser("revoke", help="kill all links, keep the photos")
