@@ -323,44 +323,53 @@ async function saveAll(list) {
 
   taskSheet.open({
     title: 'Saving to your photos',
-    summary: `Fetching ${plural(list.length, 'photo')}…`,
+    summary: `${plural(list.length, 'photo')} to save`,
   });
 
   const rows = new Map();
   for (const r of list) rows.set(r.base, taskSheet.row(label(r)));
 
-  let files;
-  try {
-    files = await fetchFiles(backend, list, album.n, (done, total, rec) => {
-      rows.get(rec.base)?.('done', 'Ready');
-      taskSheet.summary(`Fetched ${done} of ${total}`);
-    });
-  } catch (e) {
-    taskSheet.summary(explain(e)).action('Close', () => taskSheet.close());
-    return;
-  }
-
-  // iOS wants a user gesture per share() call, so batches get one tap each.
-  const batches = chunk(files, BATCH);
-  const recBatches = chunk(list, BATCH);
+  // iOS wants a user gesture per share() call, so batches get one tap each —
+  // and each batch is fetched immediately before its own tap rather than the
+  // whole selection up front. Fetching everything first held every original in
+  // memory before you could save any of them, and made the first save wait on
+  // the last download. This is also the shape a video would need.
+  const batches = chunk(list, BATCH);
   let b = 0;
 
-  const offer = () => {
+  const offer = async () => {
+    const recs = batches[b];
     const from = b * BATCH + 1;
-    const to = from + batches[b].length - 1;
+    const to = from + recs.length - 1;
+
+    taskSheet.hideAction();
+    taskSheet.summary(batches.length > 1
+      ? `Fetching ${from}–${to} of ${list.length}…`
+      : `Fetching ${plural(list.length, 'photo')}…`);
+
+    let files;
+    try {
+      files = await fetchFiles(backend, recs, album.n, (done, _total, rec) => {
+        rows.get(rec.base)?.('done', 'Ready');
+      });
+    } catch (e) {
+      taskSheet.summary(explain(e)).action('Close', () => taskSheet.close());
+      return;
+    }
+
     taskSheet.summary(batches.length > 1
       ? `Ready. Your phone takes them ${BATCH} at a time — pick “Save Images” each time.`
       : 'Ready. Pick “Save Images” in the sheet that opens.');
     taskSheet.action(
-      batches.length > 1 ? `Save ${from}–${to} of ${files.length}` : `Save ${plural(files.length, 'photo')}`,
+      batches.length > 1 ? `Save ${from}–${to} of ${list.length}` : `Save ${plural(files.length, 'photo')}`,
       async () => {
         try {
-          await shareFiles(batches[b]);   // nothing awaited first: gesture intact
+          await shareFiles(files);        // nothing awaited first: gesture intact
         } catch (e) {
           if (e.name !== 'AbortError') toast(`Could not save: ${e.message}`, 'bad');
           return;
         }
-        seen.markSaved(recBatches[b]);
+        seen.markSaved(recs);
         gallery.refresh();
         b++;
         if (b < batches.length) offer();
@@ -482,6 +491,12 @@ $('linkGo').onclick = () => {
   history.replaceState(null, '', fragmentFromText($('linkInput').value));
   openAlbum(a);
 };
+
+// A static site with no service worker still gets cached hard by phones, and
+// "am I actually running what I just pushed?" is otherwise unanswerable. Note
+// this only tracks index.html's freshness — a stale cached module would not
+// show up here.
+$('verTag').textContent = document.body.dataset.version || '';
 
 addEventListener('resize', checkOverflow);
 

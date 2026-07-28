@@ -7,7 +7,9 @@
 <title>Photoshare</title>
 <link rel="stylesheet" href="app.css">
 
-<body data-screen="boot">
+<!-- data-version: bump by hand on every deploy. index.html is what browsers
+     revalidate soonest, so it's the most honest place to stamp it from. -->
+<body data-screen="boot" data-version="v2026-07-28b">
 
 <!-- ── boot ────────────────────────────────────────────────────────────── -->
 <section class="screen" id="scr-boot">
@@ -79,6 +81,7 @@
     </div>
     <div class="meta">
       <span id="galMeta"></span>
+      <span class="version" id="verTag"></span>
       <button class="metabtn" id="selectBtn">Select</button>
     </div>
   </header>

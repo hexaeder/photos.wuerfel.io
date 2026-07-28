@@ -44,7 +44,6 @@ export function createLightbox({ backend, album, seen, onDeleted, onChanged, ctx
                          // after the user has swiped on.
 
   const CAN_SHARE = canShareFiles();
-  const SAVE_LABEL = CAN_SHARE ? 'Save' : 'Download';
   const cur = () => list[idx];
 
   // ── slides ─────────────────────────────────────────────────────────────
@@ -127,26 +126,61 @@ export function createLightbox({ backend, album, seen, onDeleted, onChanged, ctx
 
     loadWindow();
 
-    // With Web Share, the bytes must already be in hand when Save is tapped —
-    // iOS drops the gesture across an await. Without it, a presigned download
-    // URL does the job and nothing needs fetching.
     ready = null;
     const btn = $('lbSave');
+    btn.classList.remove('primary');
+
+    if (!CAN_SHARE) {
+      // Presigning is pure crypto — no bytes move until the tap — and the
+      // click that starts a download has to be synchronous inside that tap or
+      // browsers block it. So the URL is prepared up front; it costs nothing.
+      btn.disabled = true;
+      btn.textContent = 'Download';
+      try {
+        ready = await backend.downloadUrlFor(rec.key, downloadName(rec, album.n));
+        if (token !== mine) return;                  // swiped on; discard
+        btn.disabled = false;
+      } catch {
+        if (token === mine) btn.textContent = 'Unavailable';
+      }
+      return;
+    }
+
+    // Web Share is the opposite: it needs the actual bytes in hand *before*
+    // the tap that shares them, because iOS drops the gesture across an await.
+    // That used to be done eagerly here, which meant swiping through fifty
+    // photos downloaded fifty originals for Save buttons nobody pressed. Now
+    // the first tap fetches and the second shares — see fetchForShare().
+    // Nothing above the mid copy (§7.6) moves until someone asks for it.
+    btn.disabled = false;
+    btn.textContent = 'Save';
+  }
+
+  /** Tap 1 of a share: pull the original down and re-arm the button. */
+  async function fetchForShare(rec) {
+    const btn = $('lbSave');
+    const mine = token;
     btn.disabled = true;
-    btn.textContent = SAVE_LABEL;
+    btn.textContent = 'Fetching…';
+    let blob;
     try {
-      const got = CAN_SHARE
-        ? await backend.get(rec.key)
-        : await backend.downloadUrlFor(rec.key, downloadName(rec, album.n));
-      if (token !== mine) return;                    // swiped on; discard
-      ready = CAN_SHARE
-        ? new File([got], downloadName(rec, album.n),
-                   { type: got.type || 'image/jpeg' })
-        : got;
-      btn.disabled = false;
+      blob = await backend.get(rec.key);
     } catch {
       if (token === mine) btn.textContent = 'Unavailable';
+      return;
     }
+    if (token !== mine) return;                      // swiped on; onIndex reset it
+    ready = new File([blob], downloadName(rec, album.n),
+                     { type: blob.type || 'image/jpeg' });
+    btn.disabled = false;
+    btn.textContent = 'Save to Photos';
+    btn.classList.add('primary');   // it changed meaning; make that impossible to miss
+  }
+
+  function markSaved(rec) {
+    seen.markSaved([rec]);
+    onChanged?.();
+    $('lbUnmark').hidden = false;
   }
 
   // ── paging ─────────────────────────────────────────────────────────────
@@ -208,21 +242,20 @@ export function createLightbox({ backend, album, seen, onDeleted, onChanged, ctx
 
   $('lbSave').onclick = async () => {
     const rec = cur();
-    if (!ready) return;
 
     if (!CAN_SHARE) {
-      downloadUrl(ready);
-      seen.markSaved([rec]);
-      onChanged?.();
-      $('lbUnmark').hidden = false;
+      if (!ready) return;
+      downloadUrl(ready);                           // synchronous: inside the tap
+      markSaved(rec);
       toast(isTouch() ? 'Saved to Downloads' : 'Downloaded');
       return;
     }
+
+    if (!ready) return fetchForShare(rec);          // tap 1
+
     try {
       await shareFiles([ready]);                    // nothing awaited before this
-      seen.markSaved([rec]);
-      onChanged?.();
-      $('lbUnmark').hidden = false;
+      markSaved(rec);
       toast('Marked as saved — pick “Save Image” in the sheet');
     } catch (e) {
       if (e.name === 'AbortError') return;          // sheet dismissed

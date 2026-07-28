@@ -1134,6 +1134,22 @@ crash mobile Safari (§8.3), and note that the pressure is the *decoded* frame,
 `Math.round(scrollLeft / clientWidth)` on a settle-debounced scroll listener,
 which is also what keeps the metadata bar and the prefetched save-blob in step.
 
+**Nothing above the mid copy is ever fetched speculatively.** The Save button
+used to download the original the moment you landed on a slide, so that the
+bytes were in hand before the tap (see the gesture gotcha below) — which meant
+swiping through fifty photos pulled fifty full-size originals for Save buttons
+nobody pressed. It is now two taps: **Save** fetches, then **Save to Photos**
+shares. The armed state goes `primary` because the button changed meaning and
+that has to be unmissable.
+
+The non-share path keeps its single tap, because there is nothing to prefetch —
+`downloadUrlFor` only signs a URL, no bytes move until the click, and that click
+has to be synchronous inside the tap or browsers block the download. So the URL
+is still prepared up front there; it costs nothing.
+
+This is also the shape a video needs (§11.2), which is most of why it's built
+this way rather than with a size threshold.
+
 **The gesture gotcha:** Safari requires `navigator.share()` to be called inside
 a user-gesture task. `await fetch(...)` first and the gesture is gone
 (`NotAllowedError`). Structure it as two taps:
@@ -1151,7 +1167,12 @@ shareBtn.onclick = () => {
 };
 ```
 
-Batch ~10 files per call.
+Batch ~10 files per call, and **fetch each batch immediately before its own
+tap** rather than the whole selection up front. Fetching everything first held
+every original in memory before you could save any of them, and made the first
+save wait on the last download. Per-batch fetching bounds the memory to ten
+originals no matter how many are selected — which is what makes a video
+conceivable here at all (§11.2).
 
 Branch on `canShare({ files })` with a real probe file, never on user-agent
 sniffing — and note that `canShare({ files: [] })` is not a reliable probe,
@@ -1324,11 +1345,11 @@ per-file upload progress bars (needs `XMLHttpRequest`, §7.1), album cover.
    picker line is one character of work; everything behind it is not. Costed
    out, in the order that would bite:
 
-   - **Bulk save is the real blocker.** `saveAll` fetches *every* selected file
-     into memory before chunking into batches of ten (§7.5). That's correct for
-     photos and fatal for a 400 MB clip — it needs per-batch fetching against a
-     byte budget rather than a count, and that rework lands on the one flow
-     already verified on real phones.
+   - ~~**Bulk save is the real blocker.**~~ **Done, 2026-07-28.** `saveAll` now
+     fetches one batch at a time immediately before its tap (§7.5), and the
+     lightbox no longer prefetches originals at all (§7.6), so the explicit
+     fetch-then-share structure a video needs already exists. What remains for
+     videos here is a byte budget per batch rather than a flat count of ten.
    - **Hashing.** `crypto.subtle` has no streaming digest and
      `file.arrayBuffer()` on a long 4K clip kills mobile Safari. A video would
      have to hash its first ~16 MB plus its byte length; images must keep

@@ -316,6 +316,15 @@ textarea {
 }
 .meta b { color: var(--safelight); font-weight: 400; }
 
+/* Deploy stamp. Deliberately dim and unexplained — it's a diagnostic for
+   "did this phone actually pick up the push", not information for guests. */
+.meta .version {
+  flex: 0 0 auto;
+  opacity: .55;
+  letter-spacing: .06em;
+  text-transform: none;
+}
+
 /* Long-press already selects, but nobody discovers a long-press — so this is
    the discoverable route and has to look like a control, not a footnote. */
 .metabtn {
@@ -740,6 +749,10 @@ textarea {
 
 .lbacts { flex: 0 0 auto; display: flex; gap: 6px; }
 .lbacts .btn { background: rgba(0, 0, 0, .55); }
+/* Needed explicitly: the rule above and `.btn.primary` have equal specificity,
+   and this one comes later — so the armed Save button would otherwise keep its
+   translucent black fill and render near-black text on it. */
+.lbacts .btn.primary { background: var(--safelight); }
 
 /* ── upload sheet ─────────────────────────────────────────────────────── */
 

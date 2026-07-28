@@ -92,8 +92,18 @@ vendored dependency. `spike/` is the frozen Phase-0 proof-of-concept; don't edit
   but a 403 must still be handled gracefully — an expired upload window produces one on a link
   that had no flag.
 - **Never `await` before `navigator.share()`.** iOS drops the user gesture and throws
-  `NotAllowedError`. Bulk save therefore fetches bytes on an earlier tap and shares in batches of
-  `BATCH`, one tap each. Branch on `canShareFiles()`, never on the user agent.
+  `NotAllowedError`, so the bytes must be fetched on an *earlier* tap. Branch on
+  `canShareFiles()`, never on the user agent.
+- **Originals are never fetched speculatively.** Saving is two taps on share-capable devices
+  (fetch, then share), and bulk save fetches one `BATCH` immediately before that batch's tap
+  rather than the whole selection up front — which bounds memory to ten originals however many
+  are selected. Don't reintroduce an eager prefetch to save a tap; it downloads full-size files
+  for buttons nobody presses, and it's what makes video support possible later. The non-share
+  path is the exception and stays one tap: `downloadUrlFor` only signs a URL, and the click must
+  be synchronous inside the tap or browsers block the download.
+- **Bump `data-version` on `<body>` when deploying.** It renders in the gallery meta row so a
+  stale cache is visible at a glance. It only tracks `index.html`'s freshness — a stale cached
+  ES module won't show up there.
 - **Mobile memory.** Hash and decode sequentially, `close()` every `ImageBitmap`, cap concurrent
   PUTs/GETs at ~3. Twenty full-size decodes crash mobile Safari.
 - **localStorage is never the only home for anything.** iOS wipes it after 7 days of no visits;
