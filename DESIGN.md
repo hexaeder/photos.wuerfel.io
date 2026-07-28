@@ -148,7 +148,11 @@ Practical rules that follow:
   deleted bytes regardless.
 - **Per-user sync state is readable by everyone in the album** — it lives in the
   shared prefix. "Hans downloaded 47 photos" is visible to the group.
-- **Consider stripping GPS EXIF on upload** (§8.1). Photos carry home addresses.
+- **Originals keep their GPS EXIF, deliberately** (§7.1). Where a photo was
+  taken is useful metadata and the album is for friends, so it stays. The
+  consequence to be aware of rather than fix: everyone holding the link can read
+  it, including for photos shot at home, and the link is a bearer capability
+  that may outlive your intent for it.
 
 ### 2.1 The IAM policy
 
@@ -395,10 +399,11 @@ in full by 10 friends is 80 GB against 8 GB stored, a 10:1 ratio), so the
 mitigations below are still worth having — they're cheap, and they're what keeps
 it a non-issue if the app ever outgrows one account:
 
-- **Browse on thumbnails.** A 40 KB thumbnail versus a 4 MB original is a 100×
-  reduction on the common path. This is why §8.2 generates thumbnails at upload
-  rather than serving full images scaled down — it's a cost decision as much as
-  a performance one.
+- **Never browse on originals.** The grid serves `thumbs/` (~85 KB) and the
+  lightbox `mid/` (~300 KB) against a 4 MB original, so nothing but an explicit
+  download pulls the real file. This is why §7.1 writes both derivatives at
+  upload rather than serving full images scaled down — a cost decision as much
+  as a performance one.
 - **Download only what's new.** The per-user sync state (§8.4) means the second
   visit transfers only the delta.
 - **Don't delete old albums.** Keeping them raises your stored volume, which
@@ -632,10 +637,12 @@ s3://photoshare-wuerfel/
     norway-2026/
       album.json            { schemaVersion, slug, title, createdAt }
       photos/
-        1753612800000-a3f9c1-8b21d4e0.jpg
+        1753612800000-a3f9c1-8b21d4e0.jpg    the original bytes, untouched
         └─ uploadedAt ms ─┘ └uid┘ └content hash┘
+      mid/
+        1753612800000-a3f9c1-8b21d4e0.jpg    (~2048px JPEG, the lightbox)
       thumbs/
-        1753612800000-a3f9c1-8b21d4e0.jpg    (~512px JPEG)
+        1753612800000-a3f9c1-8b21d4e0.jpg    (~512px JPEG, the grid)
       users/
         a3f9c1.json         { uid, name, updatedAt }
       state/
@@ -853,20 +860,26 @@ that silently truncates, which is a miserable bug to notice.
 easiest thing here:
 
 ```html
-<input type="file" accept="image/*,video/*" multiple>
+<input type="file" accept="image/*" multiple>
 ```
 
 iOS opens the real Photos picker sheet; Android the system photo picker.
 Multi-select works on both, and you get real `File` objects.
+
+`accept` is images only, on purpose — adding `video/*` here is one character and
+everything downstream of it is not (§11.2).
 
 Do **not** add `capture` — it forces the camera and removes the library option.
 
 Per file:
 
 1. **Hash** the bytes → content id → skip if that key already exists.
-2. **Decode** via `createImageBitmap(file)` (handles EXIF orientation). iOS
-   usually transcodes HEIC→JPEG on pick, but not always; if this throws, upload
-   the original without a thumbnail rather than failing the upload.
+2. **Decode** via `createImageBitmap(file, { imageOrientation: 'from-image' })`.
+   Pass the option explicitly: the spec's default moved to `from-image`, but
+   older Safari and Chrome shipped `none`, which leaves a rotated photo's
+   derivatives sideways under an upright full-size view. iOS usually transcodes
+   HEIC→JPEG on pick, but not always; if this throws, upload the original with
+   no derivatives rather than failing the upload.
 3. **Thumbnail**: `OffscreenCanvas` at max 512px, `toBlob('image/jpeg', 0.7)`.
    Directly load-bearing for the egress ratio (§3).
 
@@ -875,13 +888,29 @@ Per file:
    > Detailed photographs compress far worse than synthetic test images. If
    > gallery load matters, 384px at q0.6 gets closer to 40 KB; at ~1000 photos
    > that's 85 MB vs 40 MB per full browse.
-4. Optionally **downscale the original** (a 4000px cap is invisible on phones,
-   ~4× smaller). Toggle, default on.
-5. Optionally **strip GPS EXIF** — canvas re-encoding does this as a side
-   effect, which is also why it must be optional: it discards *all* EXIF
-   including the capture date. Parse `DateTimeOriginal` out first and use it for
-   sorting instead of upload time.
-6. `put()` thumbnail, then original.
+4. **Mid copy**: max 2048px at q0.82, for the lightbox (§7.6). Skipped when the
+   original's long edge is already under the cap — re-encoding it would cost
+   quality and save nothing, which is why `mid/` is allowed to be missing.
+5. `put()` thumbnail, mid, then the original.
+
+**The original is uploaded byte-for-byte. There is no downscale toggle.** An
+earlier version had one (4000px cap, default off) and it was removed: the entire
+premise of the app is that your friends get the real file rather than what a
+messenger app left of it, so an option to silently defeat that is a liability
+rather than a feature. Dropping it also deleted the only code path that
+re-encoded an original, which is what makes the EXIF story below a one-liner.
+
+**EXIF therefore survives intact** — capture date, camera, orientation, and
+**GPS**, all of it on purpose. Canvas re-encoding used to strip EXIF as a side
+effect of the downscale path; nothing does now, and nothing should. Location is
+part of what makes a trip photo worth keeping, and the alternative isn't cheap
+anyway: stripping GPS *specifically* means rewriting the EXIF block rather than
+discarding it, since discarding takes `DateTimeOriginal` with it. The trade is
+recorded in §2 — anyone holding the link can read where a photo was taken.
+
+Note the app still doesn't *read* EXIF: dates come from the upload timestamp in
+the filename, not `DateTimeOriginal`. A photo shot last summer and uploaded
+today sorts as today. Phase 4.
 
 **Concurrency 2–3, not 20.** Phones on hotel wifi with 20 parallel PUTs will
 stall. Use a small worker pool with backoff on 5xx.
@@ -1079,9 +1108,29 @@ vertically before it panned. `touch-action: pan-x` on the track settles the
 second point outright, and handing the gesture to the browser buys
 finger-tracking, momentum and end-of-list rubber-banding for nothing.
 
+**A slide never shows the original.** It paints the ~512px thumbnail first —
+the grid just fetched it, so it is already in the browser's cache and costs no
+request at all — and then swaps in the ~2048px `mid/` copy once that has
+decoded off-screen, so the exchange doesn't flash. If `mid/` is missing (the
+original was already small, or the uploader's browser couldn't decode it) the
+tier below is the original, which makes that a normal fallback rather than an
+error path.
+
+Two things this fixed. Paging used to pull several MB per slide with ±2
+preloaded, so opening the lightbox on hotel wifi meant a black screen for
+seconds; and on a share-capable phone each slide fetched the original *twice* —
+once query-signed into `<img src>`, once header-signed as a blob for the Save
+button, two different URLs that the HTTP cache cannot reconcile. Browsing now
+pays for a 2048px JPEG and only the Save path touches the original.
+
+The `.lbslide img` box is sized `100% × 100dvh` with `object-fit: contain`
+rather than shrink-to-fit, so the thumbnail and the mid copy land in identical
+geometry and the photo doesn't jump under your thumb when they swap.
+
 Slides exist for every photo but only carry an `src` within ±2 of the current
-one, and anything past ±4 is unloaded again — a few dozen full-size decodes is
-how you crash mobile Safari (§8.3). The current index comes from
+one, and anything past ±4 is unloaded again — a few dozen decodes is how you
+crash mobile Safari (§8.3), and note that the pressure is the *decoded* frame,
+~48 MB for a 12 MP photo however well it compressed. The current index comes from
 `Math.round(scrollLeft / clientWidth)` on a settle-debounced scroll listener,
 which is also what keeps the metadata bar and the prefetched save-blob in step.
 
@@ -1191,8 +1240,8 @@ js/photos.js        filename → record, frame numbers, hash set
 js/identity.js      uid + name, localStorage, users/, colour-from-uid
 js/seen.js          state/<uid>.json, lastSeenAt, downloaded, union merge
 js/gallery.js       tiles, filter, marks, lazy presigning
-js/lightbox.js      full-size viewer, nav, save, delete-own
-js/upload.js        hash → thumbnail → put, with a progress sheet
+js/lightbox.js      thumb → mid viewer, nav, save the original, delete
+js/upload.js        hash → thumb + mid → put, with a progress sheet
 js/share.js         canShare branch, batching, desktop fallback
 js/ui.js            el / toast / confirm sheet / task sheet
 lib/aws4fetch.js    vendored, MIT
@@ -1265,13 +1314,39 @@ per-file upload progress bars (needs `XMLHttpRequest`, §7.1), album cover.
 
 ## 11. Open questions
 
-1. ~~**Originals or downscaled by default?**~~ **Settled: originals, with a
-   toggle** in the upload sheet (`photoshare.fullsize` in `localStorage`).
-   Storage is cheap and the point of the album is your friends' real photos;
-   thumbnails already carry the browsing cost. Turning it off caps the long
-   edge at 4000 px, which is invisible on a phone and roughly 4× smaller.
-2. **Do videos matter?** Large extra scope: thumbnailing, size, no client-side
-   transcode. Still open.
+1. ~~**Originals or downscaled by default?**~~ **Settled: originals, always,
+   with no toggle.** Storage is cheap (§3) and the point of the album is your
+   friends' real photos — an option to quietly upload less than that defeats
+   the app's whole reason to exist over a group chat. The toggle that briefly
+   existed is gone; browsing cost is carried by `thumbs/` and `mid/` instead
+   (§7.1), which is where it belonged.
+2. **Do videos matter?** **Still open — deliberately deferred, 2026-07-28.** The
+   picker line is one character of work; everything behind it is not. Costed
+   out, in the order that would bite:
+
+   - **Bulk save is the real blocker.** `saveAll` fetches *every* selected file
+     into memory before chunking into batches of ten (§7.5). That's correct for
+     photos and fatal for a 400 MB clip — it needs per-batch fetching against a
+     byte budget rather than a count, and that rework lands on the one flow
+     already verified on real phones.
+   - **Hashing.** `crypto.subtle` has no streaming digest and
+     `file.arrayBuffer()` on a long 4K clip kills mobile Safari. A video would
+     have to hash its first ~16 MB plus its byte length; images must keep
+     whole-file hashing so the dedup guarantee in §5.1 stays intact.
+   - **Saving needs an extra tap.** The iOS gesture rule (§7.6) forbids awaiting
+     a several-hundred-MB fetch inside the tap, so the lightbox Save button
+     becomes Prepare → Save for videos.
+   - **Posters.** `createImageBitmap` won't take a container; it needs a real
+     `<video>`, muted + `playsinline`, seek, then `drawImage`. iOS declines for
+     some codecs and Chrome can't decode HEVC at all, so "no poster" is a normal
+     outcome and the tile needs a play badge rather than the `.nothumb` state.
+   - **Playback is a non-goal.** iPhones record HEVC in `.mov` and do *not*
+     transcode on pick the way they do for HEIC, so Android friends often can't
+     play what gets uploaded. Accepted: the app is a download-to-camera-roll
+     tool, not a viewer — but it means the lightbox must use
+     `preload="none"` and never pretend a clip is browsable.
+   - **Egress.** §3's model assumes browsing rides on derivatives. Twenty clips
+     would demolish that; there is no cheap video equivalent of `mid/`.
 3. ~~**Should the app detect a read-only key?**~~ **Settled: both.** The `ro`
    flag in the link (§5.2) hides the write UI with no probe request, and a 403
    on write is still handled with a specific message — which is what covers a

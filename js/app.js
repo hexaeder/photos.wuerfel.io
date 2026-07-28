@@ -88,12 +88,29 @@ function repalette() {
 
 function openIdentity({ returning = false } = {}) {
   const candidate = ctx.me ?? { uid: newUid(), name: randomName() };
+  const firstTime = !ctx.me;
 
   $('identAlbum').textContent = album.n;
-  $('nameInput').value = candidate.name;
+  // A newcomer starts with an empty field rather than a prefilled random name:
+  // a name someone typed is worth far more to the group than one we invented,
+  // and a prefilled field reads as already answered. The random name survives
+  // as the fallback below, unseen unless it's actually needed.
+  $('nameInput').value = firstTime ? '' : candidate.name;
   $('identSwatch').style.setProperty('--person', colorFor(candidate.uid));
-  $('identGo').textContent = returning ? 'Save' : 'Start';
   $('identCancel').hidden = !returning;
+
+  // The nudge is the button itself: nothing is blocked, but leaving the field
+  // empty visibly costs you the primary action and says what you're skipping.
+  const syncGo = () => {
+    const typed = $('nameInput').value.trim();
+    const go = $('identGo');
+    go.textContent = returning ? 'Save' : typed ? 'Start' : 'Start without a name';
+    // Plain (bordered) rather than `ghost` when empty — still an obvious
+    // button, just no longer the highlighted one.
+    go.classList.toggle('primary', Boolean(typed) || returning);
+  };
+  $('nameInput').oninput = syncGo;
+  syncGo();
 
   const others = [...ctx.users.values()].filter((u) => u.uid !== candidate.uid);
   $('identKnown').hidden = others.length === 0;
@@ -277,6 +294,7 @@ async function deleteSelected() {
     try {
       await backend.remove(rec.key);
       await backend.remove(rec.thumbKey);
+      await backend.remove(rec.midKey);
       forget(rec);
       set('done', 'Deleted');
       gone++;

@@ -14,9 +14,24 @@ import { canShareFiles, shareFiles, downloadUrl, isTouch } from './share.js';
 // Slides are created for every photo but only carry an `src` within ±2 of the
 // current one; anything past ±4 is unloaded again, because a few dozen
 // full-size decodes is how you crash mobile Safari.
+//
+// A slide never shows the original. It shows the ~512px thumbnail the grid
+// already has in cache — instantly, no request — and then swaps in the ~2048px
+// mid copy once that has decoded. Originals are several MB each and 48 MB
+// apiece decoded, so paging through them was both slow and the thing NEAR/FAR
+// were fighting. They are still what the Save button hands you; browsing just
+// stopped paying for them.
 
 const NEAR = 2;
 const FAR = 4;
+
+/** Resolves once the browser holds a decoded frame, so the swap can't flash. */
+const preload = (url) => new Promise((resolve, reject) => {
+  const probe = new Image();
+  probe.onload = () => resolve(url);
+  probe.onerror = () => reject(new Error(`could not load ${url}`));
+  probe.src = url;
+});
 
 export function createLightbox({ backend, album, seen, onDeleted, onChanged, ctx }) {
   const box = $('lightbox');
@@ -41,16 +56,42 @@ export function createLightbox({ backend, album, seen, onDeleted, onChanged, ctx
 
   const imgAt = (i) => track.children[i]?.firstElementChild;
 
+  /**
+   * Fill slide `i`, cheapest tier first.
+   *
+   * `mid/` is absent whenever the original was already under the cap, or when
+   * the uploader's browser couldn't decode the file — so falling through to
+   * the original is an ordinary path, not an error path. Same for the
+   * thumbnail, which is why its own load failure just clears the src rather
+   * than leaving a broken-image glyph on screen.
+   */
   async function hydrate(i) {
     const img = imgAt(i);
     const rec = list[i];
     if (!img || !rec || img.dataset.k === rec.base) return;
     img.dataset.k = rec.base;
+    const stale = () => img.dataset.k !== rec.base;   // swiped on mid-flight
+
+    // loadWindow fires these off without awaiting, so nothing here may reject.
     try {
-      img.src = await backend.urlFor(rec.key);
-    } catch {
-      delete img.dataset.k;
+      img.onerror = () => img.removeAttribute('src');
+      img.src = await backend.urlFor(rec.thumbKey);
+    } catch { /* signing failed; the tiers below still get their turn */ }
+
+    for (const key of [rec.midKey, rec.key]) {
+      try {
+        const url = await preload(await backend.urlFor(key));
+        if (stale()) return;
+        img.onerror = null;
+        img.src = url;
+        return;
+      } catch {
+        if (stale()) return;
+      }
     }
+    // Nothing above the thumbnail could be had — offline, most likely. Drop
+    // the marker so the next pass through loadWindow tries again.
+    delete img.dataset.k;
   }
 
   function loadWindow() {
@@ -215,6 +256,7 @@ export function createLightbox({ backend, album, seen, onDeleted, onChanged, ctx
     try {
       await backend.remove(rec.key);
       await backend.remove(rec.thumbKey);
+      await backend.remove(rec.midKey);
     } catch (e) {
       toast(e.status === 403
         ? 'This link can no longer change the album.'

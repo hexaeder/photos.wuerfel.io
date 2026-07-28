@@ -664,8 +664,12 @@ textarea {
 }
 
 .lbslide img {
-  max-width: 100%;
-  max-height: 100dvh;           /* dvh: iOS Safari's toolbar makes vh wrong */
+  /* A fixed box rather than a shrink-to-fit one. The slide paints the cached
+     thumbnail first and swaps in the mid-size copy a moment later; sized to
+     their natural widths those two would land in different geometry and the
+     photo would jump under your thumb. object-fit does the letterboxing. */
+  width: 100%;
+  height: 100dvh;               /* dvh: iOS Safari's toolbar makes vh wrong */
   object-fit: contain;
   user-select: none;
   -webkit-user-select: none;
@@ -843,17 +847,6 @@ textarea {
   letter-spacing: .1em;
   color: var(--ink-dim);
 }
-
-.opt {
-  display: flex;
-  align-items: center;
-  gap: .55rem;
-  margin: .2rem 0 .8rem;
-  font-size: 12px;
-  color: var(--ink-dim);
-  cursor: pointer;
-}
-.opt input { accent-color: var(--safelight); width: 16px; height: 16px; }
 
 /* ── toasts ───────────────────────────────────────────────────────────── */
 

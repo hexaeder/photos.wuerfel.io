@@ -898,6 +898,7 @@ def cmd_info(args):
     meta = read_album_json(slug) or {}
     photos = list(iter_objects(f"{album_prefix(slug)}photos/"))
     thumbs = list(iter_objects(f"{album_prefix(slug)}thumbs/"))
+    mids = list(iter_objects(f"{album_prefix(slug)}mid/"))
 
     # Filenames are <epoch>-<uid>-<hash>.<ext>, so the uid is field 2.
     by_user: dict[str, int] = {}
@@ -919,7 +920,11 @@ def cmd_info(args):
     print(f"album:    {meta.get('title', slug)}  ({slug})")
     print(f"created:  {meta.get('createdAt', '?')}")
     print(f"photos:   {len(photos)}  ({human(sum(o['Size'] for o in photos))})")
-    print(f"thumbs:   {len(thumbs)}")
+    # Derivatives are written per photo at upload; a count short of `photos`
+    # means someone's browser couldn't decode a file, or an original was
+    # already small enough not to need a mid copy.
+    print(f"mid:      {len(mids)}  ({human(sum(o['Size'] for o in mids))})")
+    print(f"thumbs:   {len(thumbs)}  ({human(sum(o['Size'] for o in thumbs))})")
     print(f"links:    {', '.join(album_users(slug)) or 'none (revoked)'}")
     if by_user:
         print("uploads by:")

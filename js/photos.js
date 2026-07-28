@@ -10,8 +10,15 @@
 
 const NAME = /^(\d{10,16})-([0-9a-f]{4,16})-([0-9a-f]{6,32})\.([a-z0-9]{1,5})$/i;
 
-/** Thumbnails are always JPEG, whatever the original was. */
+// Three sizes per photo, all sharing one base name:
+//
+//   photos/  the original bytes, untouched — the thing people came to download
+//   mid/     ~2048px JPEG, what the lightbox shows
+//   thumbs/  ~512px JPEG, what the grid shows
+//
+// Derivatives are always JPEG, whatever the original was.
 export const thumbKeyFor = (base) => `thumbs/${base}.jpg`;
+export const midKeyFor = (base) => `mid/${base}.jpg`;
 export const photoKeyFor = (base, ext) => `photos/${base}.${ext}`;
 export const baseFor = (ts, uid, hash) => `${ts}-${uid}-${hash}`;
 
@@ -31,8 +38,12 @@ export function parsePhotos(entries) {
     const base = `${ts}-${uid}-${hash}`;
     recs.push({
       base,
-      key: `photos/${base}.${ext}`,
+      key: photoKeyFor(base, ext),
       thumbKey: thumbKeyFor(base),
+      // May not exist: originals already under the cap don't get one, and
+      // neither do files the uploader's browser couldn't decode. The lightbox
+      // treats a miss as a normal fallback, not an error.
+      midKey: midKeyFor(base),
       ts: +ts,
       uid,
       hash,

@@ -1,18 +1,25 @@
-import { $, el, taskSheet, plural } from './ui.js';
-import { baseFor } from './photos.js';
+import { $, taskSheet, plural } from './ui.js';
+import { baseFor, photoKeyFor, thumbKeyFor, midKeyFor } from './photos.js';
 
 // <input type="file" accept="image/*" multiple> is genuinely the native
 // picker: iOS opens the real Photos sheet, Android the system picker, and both
 // hand back real File objects. No `capture` attribute — it forces the camera
 // and removes the library.
+//
+// The original is uploaded byte-for-byte, always. The point of the app is that
+// your friends get the real file instead of what a messenger app left of it,
+// so there is no downscale option to get wrong — and because canvas
+// re-encoding drops every EXIF tag, keeping the original bytes is also the
+// only way capture date, camera and orientation survive the trip.
+//
+// The two derivatives exist purely so browsing doesn't cost what downloading
+// costs.
 
 const THUMB_MAX = 512;
 const THUMB_Q = 0.7;
-const ORIGINAL_MAX = 4000;   // when "full size" is off; invisible on a phone
-const ORIGINAL_Q = 0.85;
+const MID_MAX = 2048;        // comfortably over a phone screen at 3x
+const MID_Q = 0.82;
 const PARALLEL_PUTS = 3;
-
-const OPT_KEY = 'photoshare.fullsize';
 
 const EXT = {
   'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/png': 'png',
@@ -69,8 +76,6 @@ function limiter(n) {
   });
 }
 
-export const fullSizeDefault = () => localStorage.getItem(OPT_KEY) !== '0';
-
 export function createUploader({ backend, ctx, existing, onUploaded }) {
   const picker = $('filePicker');
 
@@ -92,15 +97,6 @@ export function createUploader({ backend, ctx, existing, onUploaded }) {
       summary: `${plural(files.length, 'photo')} selected`,
     });
 
-    const opt = el('label', { class: 'opt' },
-      el('input', {
-        type: 'checkbox',
-        checked: fullSizeDefault(),
-        onchange: (e) => localStorage.setItem(OPT_KEY, e.target.checked ? '1' : '0'),
-      }),
-      'Upload full-size originals');
-    $('upSummary').after(opt);
-
     const jobs = [];
 
     for (const file of files) {
@@ -118,40 +114,48 @@ export function createUploader({ backend, ctx, existing, onUploaded }) {
 
         setStatus('work', 'Preparing');
         let thumb = null;
-        let body = file;
+        let mid = null;
         try {
-          const bmp = await createImageBitmap(file);
+          // `from-image` explicitly: the spec's default moved to it, but older
+          // Safari and Chrome shipped 'none', which would leave a rotated
+          // photo's thumbnail sideways under an upright full-size view.
+          const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
           thumb = await resize(bmp, THUMB_MAX, THUMB_Q);
-          if (!fullSizeDefault() && Math.max(bmp.width, bmp.height) > ORIGINAL_MAX) {
-            body = await resize(bmp, ORIGINAL_MAX, ORIGINAL_Q);
+          // No mid copy when the original is already small enough to be one —
+          // re-encoding it would cost quality and save nothing.
+          if (Math.max(bmp.width, bmp.height) > MID_MAX) {
+            mid = await resize(bmp, MID_MAX, MID_Q);
           }
           bmp.close();
         } catch {
           // Undecodable (an exotic HEIC, say). Upload the original anyway —
-          // losing the thumbnail is better than losing the photo.
+          // losing the previews is better than losing the photo.
           thumb = null;
+          mid = null;
         }
 
         const ts = Date.now();
         const base = baseFor(ts, ctx.me.uid, hash);
-        const ext = body === file ? extFor(file) : 'jpg';
+        const ext = extFor(file);
         const rec = {
           base, hash, ts, ext,
           uid: ctx.me.uid,
-          key: `photos/${base}.${ext}`,
-          thumbKey: `thumbs/${base}.jpg`,
-          size: body.size,
+          key: photoKeyFor(base, ext),
+          thumbKey: thumbKeyFor(base),
+          midKey: midKeyFor(base),
+          size: file.size,
           num: 0,
         };
 
         setStatus('work', 'Uploading');
         jobs.push(limit(async () => {
           try {
-            // Thumbnail first: the gallery is driven by photos/, so a
+            // Derivatives first: the gallery is driven by photos/, so a
             // half-failed upload leaves an invisible orphan rather than a
             // tile with a hole in it.
             if (thumb) await backend.put(rec.thumbKey, thumb, 'image/jpeg');
-            await backend.put(rec.key, body, file.type || undefined);
+            if (mid) await backend.put(rec.midKey, mid, 'image/jpeg');
+            await backend.put(rec.key, file, file.type || undefined);
             setStatus('done', 'Added');
             added++;
             onUploaded(rec);
@@ -169,7 +173,6 @@ export function createUploader({ backend, ctx, existing, onUploaded }) {
     }
 
     await Promise.all(jobs);
-    opt.remove();
 
     const bits = [];
     if (added) bits.push(`${plural(added, 'photo')} added`);
