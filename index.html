@@ -9,7 +9,7 @@
 
 <!-- data-version: bump by hand on every deploy. index.html is what browsers
      revalidate soonest, so it's the most honest place to stamp it from. -->
-<body data-screen="boot" data-version="v2026-07-28b">
+<body data-screen="boot" data-version="v2026-07-28c">
 
 <!-- ── boot ────────────────────────────────────────────────────────────── -->
 <section class="screen" id="scr-boot">
@@ -81,7 +81,6 @@
     </div>
     <div class="meta">
       <span id="galMeta"></span>
-      <span class="version" id="verTag"></span>
       <button class="metabtn" id="selectBtn">Select</button>
     </div>
   </header>
@@ -94,6 +93,9 @@
     <span class="empty-big">Nothing on the sheet yet.</span>
     Tap <b>+</b> to add the first photos.
   </p>
+
+  <!-- Deploy stamp, reachable only by scrolling past the last frame. -->
+  <p class="colophon" id="verTag"></p>
 
   <footer class="dock">
     <button class="btn save" id="saveAllBtn" hidden></button>

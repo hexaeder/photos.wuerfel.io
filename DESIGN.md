@@ -1167,12 +1167,25 @@ shareBtn.onclick = () => {
 };
 ```
 
-Batch ~10 files per call, and **fetch each batch immediately before its own
-tap** rather than the whole selection up front. Fetching everything first held
-every original in memory before you could save any of them, and made the first
-save wait on the last download. Per-batch fetching bounds the memory to ten
-originals no matter how many are selected — which is what makes a video
-conceivable here at all (§11.2).
+**Batch by bytes, not by file count.** Since every batch costs a tap, batching
+small is a worse experience rather than a safer one — an earlier fixed batch of
+10 meant ten manual taps to save a hundred photos, which is absurd for the
+app's central action. The thing that actually constrains a `share()` call is how
+many originals sit in memory while the sheet enumerates them, so `shareBatches`
+fills each batch up to `BATCH_BYTES` (400 MB) with a loose count backstop.
+Records carry their `size` from the bucket listing, so the split is known before
+a single byte is fetched, and a typical hundred-photo album goes in one tap.
+
+> **400 MB is a guess, and it's the first number to tune.** Phase 0 only ever
+> verified a *3-file* share on hardware, so the ceiling on a large one is
+> genuinely unknown. If bulk save misbehaves on a big selection, lower it; the
+> failure mode to watch for is the tab dying rather than `share()` rejecting.
+
+**Fetch each batch immediately before its own tap**, not the whole selection up
+front. Fetching everything first held every original in memory before you could
+save any of them, and made the first save wait on the last download. Per-batch
+fetching is also what makes a video conceivable here at all (§11.2) — the byte
+budget already generalises to one.
 
 Branch on `canShare({ files })` with a real probe file, never on user-agent
 sniffing — and note that `canShare({ files: [] })` is not a reliable probe,

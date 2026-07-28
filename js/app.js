@@ -11,7 +11,7 @@ import { createGallery } from './gallery.js';
 import { createLightbox } from './lightbox.js';
 import { createUploader } from './upload.js';
 import {
-  canShareFiles, fetchFiles, chunk, shareFiles, BATCH,
+  canShareFiles, fetchFiles, shareBatches, shareFiles,
   isTouch, downloadUrl, downloadAll, noShareReason,
 } from './share.js';
 
@@ -329,22 +329,24 @@ async function saveAll(list) {
   const rows = new Map();
   for (const r of list) rows.set(r.base, taskSheet.row(label(r)));
 
-  // iOS wants a user gesture per share() call, so batches get one tap each —
-  // and each batch is fetched immediately before its own tap rather than the
-  // whole selection up front. Fetching everything first held every original in
-  // memory before you could save any of them, and made the first save wait on
-  // the last download. This is also the shape a video would need.
-  const batches = chunk(list, BATCH);
+  // Usually one batch, therefore one tap: batches are as large as the memory
+  // budget allows (see shareBatches), not a fixed count. Each is fetched
+  // immediately before its own tap rather than the whole selection up front —
+  // fetching everything first held every original in memory before you could
+  // save any of them, and made the first save wait on the last download.
+  const batches = shareBatches(list);
   let b = 0;
+  let saved = 0;
 
   const offer = async () => {
     const recs = batches[b];
-    const from = b * BATCH + 1;
-    const to = from + recs.length - 1;
+    const from = saved + 1;
+    const to = saved + recs.length;
+    const range = batches.length > 1 ? `${from}–${to} of ${list.length}` : null;
 
     taskSheet.hideAction();
-    taskSheet.summary(batches.length > 1
-      ? `Fetching ${from}–${to} of ${list.length}…`
+    taskSheet.summary(range
+      ? `Fetching ${range}…`
       : `Fetching ${plural(list.length, 'photo')}…`);
 
     let files;
@@ -357,11 +359,13 @@ async function saveAll(list) {
       return;
     }
 
+    // Multiple rounds only happen when the selection is too big to hold in
+    // memory at once, so say that rather than leaving it looking arbitrary.
     taskSheet.summary(batches.length > 1
-      ? `Ready. Your phone takes them ${BATCH} at a time — pick “Save Images” each time.`
+      ? `Ready. Too many to hand over at once, so this takes ${batches.length} rounds — pick “Save Images” each time.`
       : 'Ready. Pick “Save Images” in the sheet that opens.');
     taskSheet.action(
-      batches.length > 1 ? `Save ${from}–${to} of ${list.length}` : `Save ${plural(files.length, 'photo')}`,
+      range ? `Save ${range}` : `Save ${plural(files.length, 'photo')}`,
       async () => {
         try {
           await shareFiles(files);        // nothing awaited first: gesture intact
@@ -371,6 +375,7 @@ async function saveAll(list) {
         }
         seen.markSaved(recs);
         gallery.refresh();
+        saved += recs.length;
         b++;
         if (b < batches.length) offer();
         else {

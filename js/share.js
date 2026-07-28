@@ -9,7 +9,43 @@ import { downloadName } from './photos.js';
 //
 // Branch on canShare, never on the user agent.
 
-export const BATCH = 10;
+// How much one share() call is asked to carry.
+//
+// iOS needs a user gesture per share(), so every batch costs a tap — which
+// means batching small is a *worse* experience, not a safer one. The real limit
+// isn't a file count at all, it's how many originals can sit in memory at once
+// while the sheet enumerates them, so the budget is in bytes. Records carry
+// their `size` from the bucket listing, so this is known before anything is
+// fetched.
+//
+// 400 MB is a deliberate guess and the number to tune first if bulk save
+// misbehaves: Phase 0 only ever verified a 3-file share on hardware. The count
+// cap is a backstop against a share sheet being handed a thousand tiny files.
+export const BATCH_BYTES = 400 * 1024 * 1024;
+export const BATCH_COUNT = 200;
+
+/**
+ * Split records into share batches, largest batches the budget allows.
+ *
+ * A single file over the budget still gets a batch of its own rather than being
+ * dropped — better to try and fail visibly than to silently skip a photo.
+ */
+export function shareBatches(recs, maxBytes = BATCH_BYTES, maxCount = BATCH_COUNT) {
+  const out = [];
+  let cur = [];
+  let bytes = 0;
+  for (const rec of recs) {
+    if (cur.length && (cur.length >= maxCount || bytes + (rec.size || 0) > maxBytes)) {
+      out.push(cur);
+      cur = [];
+      bytes = 0;
+    }
+    cur.push(rec);
+    bytes += rec.size || 0;
+  }
+  if (cur.length) out.push(cur);
+  return out;
+}
 
 let _can = null;
 
@@ -25,9 +61,6 @@ export function canShareFiles() {
   }
   return _can;
 }
-
-export const chunk = (arr, n) =>
-  Array.from({ length: Math.ceil(arr.length / n) }, (_, i) => arr.slice(i * n, i * n + n));
 
 /**
  * Download the originals as Files, in order, three at a time.

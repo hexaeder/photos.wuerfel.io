@@ -316,15 +316,6 @@ textarea {
 }
 .meta b { color: var(--safelight); font-weight: 400; }
 
-/* Deploy stamp. Deliberately dim and unexplained — it's a diagnostic for
-   "did this phone actually pick up the push", not information for guests. */
-.meta .version {
-  flex: 0 0 auto;
-  opacity: .55;
-  letter-spacing: .06em;
-  text-transform: none;
-}
-
 /* Long-press already selects, but nobody discovers a long-press — so this is
    the discoverable route and has to look like a control, not a footnote. */
 .metabtn {
@@ -414,7 +405,21 @@ textarea {
      density. min() is what stops it overflowing at the very bottom end. */
   grid-template-columns: repeat(auto-fill, minmax(min(92px, 100%), 1fr));
   gap: 8px;
+  /* The dock clearance that used to live here is on .colophon now, so the
+     stamp sits directly under the last row instead of after a dead gap. */
+  padding: 0 var(--pad) 1.4rem;
+}
+
+/* Deploy stamp: a diagnostic for "did this phone pick up the push", not
+   something guests need in their face — so it lives past the last frame and
+   carries the scroll clearance for the fixed dock. */
+.colophon {
   padding: 0 var(--pad) 6.5rem;
+  text-align: center;
+  font: 9px/1 var(--mono);
+  letter-spacing: .18em;
+  color: var(--ink-dim);
+  opacity: .5;
 }
 
 .tile {
