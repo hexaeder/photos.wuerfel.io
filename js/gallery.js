@@ -1,15 +1,23 @@
 import { $, el, plural } from './ui.js';
 import { colorFor, nameOf, shortName } from './identity.js';
-import { frameNo } from './photos.js';
+import { frameNo, byMode } from './photos.js';
 
 // Tiles are built once and filtering toggles `hidden`. No re-render, no
 // virtual DOM, and it stays smooth at a thousand photos.
+//
+// Re-sorting works the same way: appending an already-attached node *moves* it,
+// so reordering the grid costs one append call and keeps every loaded
+// thumbnail, presigned URL and selection state alive.
+//
+// `recs` here is this module's own copy of the list. app.js keeps its own as the
+// source of truth for uploads and deletes; sharing one array made the two drift
+// apart the moment either side filtered it.
 
 const STAGGER_MAX = 30;   // only the first screenful gets the entrance
 
 const LONG_PRESS_MS = 450;
 
-export function createGallery({ backend, seen, onOpen, onSelect }) {
+export function createGallery({ backend, seen, onOpen, onSelect, sort = 'added' }) {
   const grid = $('grid');
   const tiles = new Map();        // base → <button>
   const signed = new Map();       // path → presigned URL
@@ -213,8 +221,13 @@ export function createGallery({ backend, seen, onOpen, onSelect }) {
     renderHeader();
   }
 
+  /** Move the existing tiles into `recs` order. No tiles are created. */
+  function reorder() {
+    grid.append(...recs.map((r) => tiles.get(r.base)).filter(Boolean));
+  }
+
   function render(nextRecs, nextUsers, nextMe) {
-    recs = nextRecs;
+    recs = [...nextRecs].sort(byMode(sort));
     users = nextUsers;
     me = nextMe;
 
@@ -249,6 +262,20 @@ export function createGallery({ backend, seen, onOpen, onSelect }) {
     pending,
     visible,
 
+    /**
+     * 'added' (upload time) or 'taken' (EXIF, falling back to upload time).
+     *
+     * Frame numbers deliberately do *not* follow: they're an identity, printed
+     * in the lightbox and baked into download filenames, so sorting by capture
+     * date shows 007 next to 042 — which reads as "shot together, uploaded
+     * weeks apart" rather than as a glitch.
+     */
+    setSort(next) {
+      sort = next;
+      recs.sort(byMode(sort));
+      reorder();
+    },
+
     setSelecting,
     selected: selectedRecs,
     isSelecting: () => selecting,
@@ -278,8 +305,17 @@ export function createGallery({ backend, seen, onOpen, onSelect }) {
     add(rec) {
       const tile = makeTile(rec);
       tiles.set(rec.base, tile);
-      grid.prepend(tile);
+      recs.unshift(rec);
       io.observe(tile);
+      if (sort === 'added') {
+        grid.prepend(tile);          // newest by upload time, so it belongs first
+      } else {
+        // By capture date it could belong anywhere — a photo from day one
+        // uploaded last.
+        grid.append(tile);
+        recs.sort(byMode(sort));
+        reorder();
+      }
       applyFilter();
       renderChips();
       renderHeader();
@@ -289,6 +325,9 @@ export function createGallery({ backend, seen, onOpen, onSelect }) {
       tiles.get(base)?.remove();
       tiles.delete(base);
       picked.delete(base);
+      // Drop it from our own list too, or the chip counts and the lightbox's
+      // page list keep the deleted photo.
+      recs = recs.filter((r) => r.base !== base);
       // Frame numbers are positions in arrival order, so they close up.
       for (const tile of tiles.values()) {
         const f = tile.querySelector('.frame span');

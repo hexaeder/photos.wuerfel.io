@@ -117,7 +117,9 @@ export function createLightbox({ backend, album, seen, onDeleted, onChanged, ctx
     $('lbWho').textContent = nameOf(users, rec.uid);
     $('lbFrame').textContent = frameNo(rec.num);
     $('lbFrame').style.setProperty('--person', colour);
-    $('lbDate').textContent = shortDate(rec.ts);
+    // When it was taken is what a person means by "when is this photo from";
+    // the upload time is only a stand-in for photos whose EXIF didn't say.
+    $('lbDate').textContent = shortDate(rec.captured ?? rec.ts);
 
     $('lbPrev').hidden = idx === 0;
     $('lbNext').hidden = idx === list.length - 1;

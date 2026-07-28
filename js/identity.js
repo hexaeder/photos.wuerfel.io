@@ -134,7 +134,18 @@ export function saveMe(me) {
   return me;
 }
 
-/** Everyone who has ever written to this album: uid → { uid, name }. */
+// users/<uid>.json is the public record one person asserts about themselves and
+// about the photos they uploaded:
+//
+//   { uid, name, updatedAt, photos: { <base>: { captured } } }
+//
+// Name and photo metadata live together because they share an audience and a
+// lifecycle — everyone reads them once at boot, and both change rarely. Seen
+// state deliberately does not join them (state/<uid>.json): only its owner
+// reads it, it is rewritten every couple of seconds while saving, and it grows
+// with the album rather than with this person's uploads.
+
+/** Everyone who has ever written to this album: uid → { uid, name, photos }. */
 export async function loadUsers(backend) {
   const entries = await backend.list('users/');
   const users = new Map();
@@ -145,16 +156,40 @@ export async function loadUsers(backend) {
       const uid = e.name.replace(/\.json$/, '');
       const rec = await backend.getJSON(e.path).catch(() => null);
       const name = rec?.name?.trim();
-      users.set(uid, { uid, name: name || uid });
+      users.set(uid, {
+        uid,
+        name: name || uid,
+        // Absent on records written before capture dates existed, and on
+        // anything hand-written into the bucket.
+        photos: (rec?.photos && typeof rec.photos === 'object') ? rec.photos : {},
+      });
     }));
 
   return users;
 }
 
-export const writeUser = (backend, me) =>
-  backend.putJSON(`users/${me.uid}.json`, {
-    uid: me.uid, name: me.name, updatedAt: new Date().toISOString(),
+/**
+ * Write one person's whole record. Only its owner ever calls this.
+ *
+ * Merged against the remote copy rather than overwriting it: the same person on
+ * a second device may have added photos since this one loaded, and capture
+ * dates are append-only per key so a union is simply correct. The name is
+ * last-write-wins, which is the behaviour you want anyway.
+ *
+ * That leaves the race narrowed to the gap between this read and its put, so
+ * callers must still write **once per upload batch** — three of `upload.js`'s
+ * parallel PUTs each doing read-modify-write on this key would clobber.
+ */
+export async function writeUser(backend, rec) {
+  const path = `users/${rec.uid}.json`;
+  const remote = await backend.getJSON(path).catch(() => null);
+  return backend.putJSON(path, {
+    uid: rec.uid,
+    name: rec.name,
+    updatedAt: new Date().toISOString(),
+    photos: { ...(remote?.photos ?? {}), ...(rec.photos ?? {}) },
   });
+}
 
 /** Display name for a uid, falling back to the uid itself. */
 export const nameOf = (users, uid) => users.get(uid)?.name || uid;

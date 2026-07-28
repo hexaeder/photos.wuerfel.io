@@ -637,14 +637,15 @@ s3://photoshare-wuerfel/
     norway-2026/
       album.json            { schemaVersion, slug, title, createdAt }
       photos/
-        1753612800000-a3f9c1-8b21d4e0.jpg    the original bytes, untouched
+        1753612800000-a3f9c1-8b21d4e09c37.jpg    the original bytes, untouched
         └─ uploadedAt ms ─┘ └uid┘ └content hash┘
       mid/
-        1753612800000-a3f9c1-8b21d4e0.jpg    (~2048px JPEG, the lightbox)
+        1753612800000-a3f9c1-8b21d4e09c37.jpg    (~2048px JPEG, the lightbox)
       thumbs/
-        1753612800000-a3f9c1-8b21d4e0.jpg    (~512px JPEG, the grid)
+        1753612800000-a3f9c1-8b21d4e09c37.jpg    (~512px JPEG, the grid)
       users/
-        a3f9c1.json         { uid, name, updatedAt }
+        a3f9c1.json         { uid, name, updatedAt,
+                              photos: { <base>: { captured } } }
       state/
         a3f9c1.json         { uid, lastSeenAt, downloaded: [...] }
 ```
@@ -658,6 +659,31 @@ If every JSON file vanished, the gallery would still render correctly. It also
 lets `photoshare info` report per-person upload counts without reading a single
 object body.
 
+**But only immutable identity goes in the filename.** Content hash, uploader and
+arrival order are facts that must never drift and must be free to read, so they
+belong in the key. *Derived* metadata does not: putting a capture date there
+would make it permanently unfixable, because changing a key means copy + delete
+at a 90-day storage charge. So `users/<uid>.json` carries a `photos` map, and
+that's the general home for enrichment — capture dates now, captions later.
+
+There are exactly **two** files per person rather than one or three, split on
+who reads them and how often they change:
+
+| | Written by | Read by | Rewritten | Grows with |
+|---|---|---|---|---|
+| `users/<uid>.json` | owner | **everyone**, at boot | on rename or upload | that person's uploads |
+| `state/<uid>.json` | owner | **owner only** | every ~1.5 s while saving | album size |
+
+Name and photo metadata share an audience and a lifecycle, so keeping them apart
+would only have cost a second `list()` plus N GETs at boot for no benefit —
+capture dates now arrive free with the names everyone already fetches. Seen state
+stays out because merging it would make every visitor download everyone's
+`downloaded` array just to label tiles, would re-upload your name and every
+capture date on each save, and would put data other people depend on inside the
+blast radius of the app's most frequent write. The two also want different error
+policies: a read-only link legitimately can't write state and `seen.js` goes
+quiet about it, whereas a failed name write is worth telling someone about.
+
 **One writer per file.** This is the load-bearing concurrency decision. A shared
 `index.json` would be a disaster: S3 has no transactions, so two friends
 uploading at once would read-modify-write and silently clobber each other.
@@ -665,10 +691,28 @@ Instead `users/<uid>.json` and `state/<uid>.json` are only ever written by their
 owner. Concurrent writers never touch the same key, so conflicts are
 structurally impossible and no locking is needed.
 
-The content hash (first 8 hex of SHA-256 via `crypto.subtle`) gives free
+Two refinements now that `users/` holds per-photo data. **Write once per upload
+batch, never per photo** — `upload.js` runs three PUTs in parallel, and three
+read-modify-writes of one key would clobber each other; that intra-device race is
+far likelier than the two-device one. And **merge on write rather than
+overwriting**: `writeUser` unions the remote `photos` map into the local one, so
+the same person on a laptop and a phone doesn't lose dates. Capture dates are
+append-only per key, so a union is simply correct; the name is last-write-wins,
+which is what you want anyway. `seen.js` already does the same for `downloaded`.
+
+The content hash (first **12** hex of SHA-256 via `crypto.subtle`) gives free
 deduplication: re-uploading the same photo produces the same key and overwrites
 rather than duplicating. This matters more than it sounds — people re-pick the
 same photos constantly.
+
+> **Why 12 and not 8.** Truncation length is load-bearing here precisely because
+> dedup is implicit: a collision between two *different* photos silently
+> overwrites one of them, with nothing anywhere to notice it happened. 8 hex is
+> 32 bits, which by the birthday bound is roughly 1-in-8,600 across a
+> thousand-photo album — too likely for a failure this quiet. 48 bits puts it
+> past 1-in-500,000. Widening needed no parser change (`NAME` already accepted
+> 6–32 hex) but it does mean old and new uploads don't dedup against each other,
+> so it was done during the debug phase deliberately.
 
 > **Verified on iOS, 2026-07-27.** The same camera photo picked three times in
 > separate picker sessions produced one object, not three — so Safari's
@@ -924,9 +968,27 @@ whether done/not-done is enough.)
 
 ### 7.2 Gallery
 
-CSS grid of thumbnails via presigned `urlFor()` URLs, sorted by the timestamp
-in the filename, newest first. Tiles are built once and filtering toggles
-`hidden` — no re-render, and it stays smooth at a thousand photos.
+CSS grid of thumbnails via presigned `urlFor()` URLs, newest first. Tiles are
+built once and filtering toggles `hidden` — no re-render, and it stays smooth at
+a thousand photos.
+
+**Sort is switchable between "added" and "taken"** (`photoshare.sort`, the one
+thing allowed to live in `localStorage` alone, since losing a view preference
+costs nothing). Added uses the timestamp in the filename; taken uses the EXIF
+date from `users/<uid>.json`, falling back to upload time for photos that don't
+claim one. The button is hidden entirely when no photo in the album has a
+capture date, rather than offering a control that reorders nothing.
+
+Re-sorting reuses the build-once trick: appending an already-attached node
+*moves* it, so reordering the whole grid is one `append` call and every loaded
+thumbnail, presigned URL and selection survives it.
+
+**Frame numbers deliberately don't follow the sort.** They're an identity — shown
+in the lightbox, baked into download filenames — and they stay in arrival order,
+so sorting by capture date puts 007 next to 042. That reads as "shot together,
+uploaded weeks apart", which is information. For the same reason the "new" badge
+and `lastSeenAt` stay on upload time: new means *new to the album*, not recently
+shot.
 
 Presigning is **lazy**, driven by an `IntersectionObserver` with a 400 px
 margin. Signing every thumbnail up front would be a thousand HMAC chains before
@@ -1272,6 +1334,7 @@ js/album.js         decode #a=, validate, `ro` flag
 js/backend-s3.js    list / get / put / remove / getJSON / putJSON / urlFor
 js/photos.js        filename → record, frame numbers, hash set
 js/identity.js      uid + name, localStorage, users/, colour-from-uid
+js/exif.js          DateTimeOriginal out of a JPEG, and nothing else
 js/seen.js          state/<uid>.json, lastSeenAt, downloaded, union merge
 js/gallery.js       tiles, filter, marks, lazy presigning
 js/lightbox.js      thumb → mid viewer, nav, save the original, delete
@@ -1342,7 +1405,10 @@ Two things Phase 1 settled that the plan had left open:
 **Phase 3 — polish.** PWA manifest + service worker + Android share target,
 per-file upload progress bars (needs `XMLHttpRequest`, §7.1), album cover.
 
-**Phase 4 — optional.** Videos, captions, EXIF date extraction, album cover.
+**Phase 4 — optional.** ~~EXIF date extraction~~ **done (2026-07-28)**: `js/exif.js`
+reads `DateTimeOriginal` at upload into `users/<uid>.json`, and the gallery sorts
+by it (§7.2). Still open: videos (§11.2), captions — which now have an obvious
+home in the same `photos` map — and an album cover.
 
 ---
 

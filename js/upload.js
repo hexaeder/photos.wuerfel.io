@@ -1,5 +1,6 @@
 import { $, taskSheet, plural } from './ui.js';
 import { baseFor, photoKeyFor, thumbKeyFor, midKeyFor } from './photos.js';
+import { capturedAt } from './exif.js';
 
 // <input type="file" accept="image/*" multiple> is genuinely the native
 // picker: iOS opens the real Photos sheet, Android the system picker, and both
@@ -35,9 +36,20 @@ function extFor(file) {
   return fromName || 'bin';
 }
 
+// 6 bytes = 12 hex = 48 bits. The truncation length is load-bearing: identical
+// content produces an identical key, so a collision between two *different*
+// photos silently overwrites one of them. At 8 hex (32 bits) that's roughly
+// 1-in-8,600 odds across a thousand-photo album, which is too close for a
+// failure mode this quiet. 48 bits puts it past 1-in-500,000.
+//
+// Changing this breaks dedup against anything already uploaded, since the same
+// file would hash to a different key. `NAME` in photos.js accepts 6–32 hex, so
+// widening needs no parser change.
+const HASH_BYTES = 6;
+
 async function sha256Short(file) {
   const digest = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
-  return [...new Uint8Array(digest)].slice(0, 4)
+  return [...new Uint8Array(digest)].slice(0, HASH_BYTES)
     .map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
@@ -76,7 +88,7 @@ function limiter(n) {
   });
 }
 
-export function createUploader({ backend, ctx, existing, onUploaded }) {
+export function createUploader({ backend, ctx, existing, onUploaded, onDone }) {
   const picker = $('filePicker');
 
   picker.addEventListener('change', () => {
@@ -134,11 +146,16 @@ export function createUploader({ backend, ctx, existing, onUploaded }) {
           mid = null;
         }
 
+        // Reads the first 256 KB, not the whole file, and null is an ordinary
+        // answer — see exif.js. Sequential with the rest of the per-file work
+        // for the same reason hashing is: mobile memory.
+        const captured = await capturedAt(file);
+
         const ts = Date.now();
         const base = baseFor(ts, ctx.me.uid, hash);
         const ext = extFor(file);
         const rec = {
-          base, hash, ts, ext,
+          base, hash, ts, ext, captured,
           uid: ctx.me.uid,
           key: photoKeyFor(base, ext),
           thumbKey: thumbKeyFor(base),
@@ -173,6 +190,12 @@ export function createUploader({ backend, ctx, existing, onUploaded }) {
     }
 
     await Promise.all(jobs);
+
+    // One metadata write for the whole batch: users/<uid>.json is a single
+    // object, and PARALLEL_PUTS concurrent read-modify-writes of it would
+    // clobber each other. This is the likelier race by far — the two-device
+    // one needs two devices.
+    onDone?.();
 
     const bits = [];
     if (added) bits.push(`${plural(added, 'photo')} added`);

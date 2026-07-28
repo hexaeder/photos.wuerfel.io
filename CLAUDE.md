@@ -50,9 +50,15 @@ albums/<slug>/
   photos/<ts>-<uid>-<hash>.<ext>    original bytes, untouched
   mid/<ts>-<uid>-<hash>.jpg         ~2048px JPEG — the lightbox
   thumbs/<ts>-<uid>-<hash>.jpg      ~512px JPEG — the grid
-  users/<uid>.json    { uid, name, updatedAt }
+  users/<uid>.json    { uid, name, updatedAt, photos: { <base>: { captured } } }
   state/<uid>.json    { uid, lastSeenAt, downloaded: [hash…] }
 ```
+
+**Two files per person, not one or three** — split by read audience and write
+frequency, not by kind of data. `users/` is public, cold, and read by everyone at
+boot, so name and per-photo metadata share it. `state/` is read only by its owner,
+rewritten every ~1.5 s while saving, and grows with album size, so it stays
+separate. Don't merge them; DESIGN.md §5.1 has the four reasons.
 
 **Originals are never re-encoded** — there is no downscale option, and that is
 deliberate (DESIGN.md §11.1): the app exists so people get the real file instead
@@ -65,19 +71,31 @@ must remove all three keys.
 
 Module map: `app.js` (boot, screen routing, bulk save, error text) → `album.js` (link decode),
 `backend-s3.js` (the only place that speaks S3), `photos.js` (filename → record),
-`identity.js` (uid/name/colour), `seen.js`, `gallery.js`, `lightbox.js`, `upload.js`,
-`share.js`, `ui.js` (`el`/`toast`/`confirmSheet`/`taskSheet`). `lib/aws4fetch.js` is the single
+`identity.js` (uid/name/colour/`users/`), `exif.js` (`DateTimeOriginal`, nothing else),
+`seen.js`, `gallery.js`, `lightbox.js`, `upload.js`, `share.js`,
+`ui.js` (`el`/`toast`/`confirmSheet`/`taskSheet`). `lib/aws4fetch.js` is the single
 vendored dependency. `spike/` is the frozen Phase-0 proof-of-concept; don't edit it.
 
 ## Invariants that span files
 
-- **The filename is the index.** `<uploadedMs>-<uid>-<sha256[0:8]>.<ext>` carries uploader,
+- **The filename is the index.** `<uploadedMs>-<uid>-<sha256[0:12]>.<ext>` carries uploader,
   time, and content hash, so one `ListObjectsV2` rebuilds the whole album and the hash gives free
   dedup. The `NAME` regex in `js/photos.js` and `baseFor`/upload naming must stay in agreement.
   Never add a shared index file.
+- **The filename holds only immutable identity.** Hash, uploader, arrival order. Derived or
+  editable metadata goes in `users/<uid>.json`'s `photos` map instead, because changing a key
+  means copy + delete at a 90-day storage charge — so a capture date in the filename could never
+  be corrected. Captions belong there too when they arrive.
 - **One writer per object.** `users/<uid>.json` and `state/<uid>.json` are written only by their
   owner. S3 has no transactions; a shared file would silently clobber. Any new per-user data
-  follows the same rule.
+  follows the same rule. Two corollaries for `users/`: write it **once per upload batch**, never
+  per photo (`upload.js` runs 3 parallel PUTs, and 3 read-modify-writes of one key clobber), and
+  `writeUser` **unions** the remote `photos` map in rather than overwriting, so a second device
+  doesn't lose dates.
+- **Frame numbers never follow the sort.** `rec.num` is arrival order — it's printed in the
+  lightbox and baked into download filenames, so it must stay stable when the gallery is sorted
+  by capture date. Likewise `seen.isNew` and `lastSeenAt` stay on upload time: "new" means new to
+  the album, not recently shot.
 - **`SITE` in `js/album.js` mirrors `SITE_BUCKET`/`SITE_REGION` in `tools/photoshare.py`.**
   Change one, change the other, or compact links point at the wrong bucket. The CLI degrades to
   the long `#a=<base64url(JSON)>` form when its config disagrees, and `album.js` must keep

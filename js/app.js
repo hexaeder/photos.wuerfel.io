@@ -1,7 +1,7 @@
 import { $, el, show, toast, taskSheet, confirmSheet, plural } from './ui.js';
 import { albumFromLocation, albumFromText, fragmentFromText } from './album.js';
 import { s3Backend } from './backend-s3.js';
-import { parsePhotos, hashesOf, frameNo, downloadName } from './photos.js';
+import { parsePhotos, hashesOf, frameNo, downloadName, applyCaptured } from './photos.js';
 import {
   loadMe, saveMe, newUid, randomName, colorFor, setPalette,
   loadUsers, writeUser, nameOf,
@@ -27,6 +27,16 @@ let seen = null;
 let gallery = null;
 let lightbox = null;
 let uploader = null;
+
+/** base → { captured } for photos *this* device uploaded: our slice of
+    users/<uid>.json, and the same object stored in ctx.users, so mutating it
+    updates both. */
+let myPhotos = {};
+
+// Sort preference. A lost preference costs nothing, so localStorage is its only
+// home — the one thing allowed to live there alone.
+const SORT_KEY = 'photoshare.sort';
+const loadSort = () => (localStorage.getItem(SORT_KEY) === 'taken' ? 'taken' : 'added');
 
 // ── error messages that say what to do ───────────────────────────────────
 
@@ -136,17 +146,38 @@ function openIdentity({ returning = false } = {}) {
   show('identity');
 }
 
+const saveMyRecord = () =>
+  writeUser(backend, { uid: ctx.me.uid, name: ctx.me.name, photos: myPhotos });
+
+/**
+ * Offer the sort toggle, and only when it would do something — an album whose
+ * photos carry no EXIF dates would get a button that reorders nothing.
+ */
+function syncSort() {
+  const btn = $('sortBtn');
+  btn.hidden = !recs.some((r) => r.captured);
+  const mode = loadSort();
+  btn.textContent = mode === 'taken' ? 'By taken' : 'By added';
+  btn.setAttribute('aria-label', mode === 'taken'
+    ? 'Sorted by when each photo was taken — activate to sort by when it was added'
+    : 'Sorted by when each photo was added — activate to sort by when it was taken');
+  gallery.setSort(mode);
+}
+
 async function start(me) {
   const renamed = ctx.users.get(me.uid)?.name !== me.name;
   const switched = ctx.me && ctx.me.uid !== me.uid;
 
   ctx.me = saveMe(me);
-  ctx.users.set(me.uid, { uid: me.uid, name: me.name });
+  // Carry the existing photo metadata across — this is a write to the same
+  // record, so dropping it here would erase every capture date we'd asserted.
+  myPhotos = { ...(ctx.users.get(me.uid)?.photos ?? {}) };
+  ctx.users.set(me.uid, { uid: me.uid, name: me.name, photos: myPhotos });
   repalette();
 
   if (renamed && !album.readonly) {
     // Names resolve at render time, so every existing photo relabels itself.
-    writeUser(backend, me).catch(() => {
+    saveMyRecord().catch(() => {
       toast('Saved on this device, but the album could not be updated.', 'bad');
     });
   }
@@ -186,6 +217,7 @@ function buildGallery() {
       seen: { isNew: (r, me) => seen.isNew(r, me), isSaved: (r) => seen.isSaved(r) },
       onOpen: (rec) => lightbox.open(gallery.visible(), rec),
       onSelect: renderSelection,
+      sort: loadSort(),
     });
 
     lightbox = createLightbox({
@@ -204,11 +236,24 @@ function buildGallery() {
       onUploaded: (rec) => {
         recs.unshift(rec);
         recs.slice().reverse().forEach((r, i) => { r.num = i + 1; });
+        if (rec.captured) myPhotos[rec.base] = { captured: rec.captured };
         gallery.add(rec);
+      },
+      // Once per batch, never per photo — see writeUser().
+      onDone: () => {
+        syncSort();               // the batch may be the first to carry dates
+        if (album.readonly) return;
+        saveMyRecord().catch(() => {
+          toast('Photos are up, but their dates could not be saved.', 'bad');
+        });
       },
     });
 
     $('addBtn').onclick = () => uploader.pick();
+    $('sortBtn').onclick = () => {
+      localStorage.setItem(SORT_KEY, loadSort() === 'taken' ? 'added' : 'taken');
+      syncSort();
+    };
     $('saveAllBtn').onclick = () => saveAll(gallery.pending());
     $('whoBtn').onclick = () => openIdentity({ returning: true });
     $('upClose').onclick = () => taskSheet.close();
@@ -231,6 +276,7 @@ function buildGallery() {
   $('galTitle').textContent = album.n;
   $('addBtn').hidden = album.readonly;
   gallery.render(recs, ctx.users, ctx.me);
+  syncSort();
 }
 
 // ── selection ────────────────────────────────────────────────────────────
@@ -241,6 +287,14 @@ function forget(rec) {
   existing.delete(rec.hash);
   recs.slice().reverse().forEach((r, i) => { r.num = i + 1; });
   gallery.remove(rec.base);
+
+  // Its capture date goes too, if it was ours to assert. Not urgent enough to
+  // write immediately — the next upload or rename carries it, and a stale entry
+  // for a key nobody lists is harmless.
+  if (rec.base in myPhotos) {
+    delete myPhotos[rec.base];
+    syncSort();                     // may have been the last dated photo
+  }
 }
 
 function renderSelection(picked) {
@@ -476,6 +530,9 @@ async function openAlbum(a) {
   if (meta?.title) album.n = meta.title;
 
   recs = parsePhotos(entries);
+  // Capture dates ride along in users/<uid>.json, which just loaded, so this
+  // costs no extra request.
+  applyCaptured(recs, ctx.users);
   existing = hashesOf(recs);
   repalette();
 

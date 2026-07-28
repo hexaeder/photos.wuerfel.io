@@ -1,7 +1,7 @@
 // The filename IS the index.
 //
-//   photos/1753612800000-a3f9c1-8b21d4e0.jpg
-//          └ uploaded ms ┘ └uid┘ └ content hash ┘
+//   photos/1753612800000-a3f9c1-8b21d4e09c37.jpg
+//          └ uploaded ms ┘ └uid┘ └ 48-bit hash ┘
 //
 // One ListObjectsV2 therefore returns the complete album — no index file to
 // drift out of sync, and no shared object for concurrent uploaders to clobber.
@@ -59,6 +59,33 @@ export function parsePhotos(entries) {
 }
 
 export const hashesOf = (recs) => new Set(recs.map((r) => r.hash));
+
+/**
+ * Fold each uploader's asserted capture dates onto the records.
+ *
+ * The filename can't carry this: it would make the date immutable, and a
+ * derived value wants to stay fixable. It lives in the uploader's own
+ * `users/<uid>.json` instead, which everyone already reads at boot — so this
+ * costs no extra request.
+ *
+ * `null` is the normal answer for a screenshot or anything without EXIF, and
+ * every record predating this. Callers fall back to `ts`.
+ */
+export function applyCaptured(recs, users) {
+  for (const rec of recs) {
+    const ms = users.get(rec.uid)?.photos?.[rec.base]?.captured;
+    rec.captured = Number.isFinite(ms) ? ms : null;
+  }
+  return recs;
+}
+
+/** What a given sort mode orders by. `taken` falls back for photos with no EXIF. */
+export const sortKey = (rec, mode) =>
+  (mode === 'taken' ? (rec.captured ?? rec.ts) : rec.ts);
+
+/** Newest first, with arrival order as the tie-break so it's always stable. */
+export const byMode = (mode) => (a, b) =>
+  sortKey(b, mode) - sortKey(a, mode) || b.ts - a.ts || a.base.localeCompare(b.base);
 
 /** uid → count, for the filter chips. */
 export function countByUid(recs) {
