@@ -9,7 +9,7 @@
 
 <!-- data-version: bump by hand on every deploy. index.html is what browsers
      revalidate soonest, so it's the most honest place to stamp it from. -->
-<body data-screen="boot" data-version="v2026-07-28f">
+<body data-screen="boot" data-version="v2026-07-28g">
 
 <!-- ── boot ────────────────────────────────────────────────────────────── -->
 <section class="screen" id="scr-boot">
@@ -81,7 +81,10 @@
     </div>
     <div class="meta">
       <span id="galMeta"></span>
-      <button class="metabtn" id="sortBtn" hidden></button>
+      <div class="seg" id="sortSeg" role="group" aria-label="Sort order" hidden>
+        <button class="segbtn" data-sort="added">Added</button>
+        <button class="segbtn" data-sort="taken">Taken</button>
+      </div>
       <button class="metabtn" id="selectBtn">Select</button>
     </div>
   </header>

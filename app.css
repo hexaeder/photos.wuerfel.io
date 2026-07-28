@@ -356,6 +356,38 @@ textarea {
   opacity: 1;
 }
 
+/* ── sort: a segment, not a button ────────────────────────────────────────
+   Sorting is a mode, not an action, so both modes stay legible and the lit one
+   states the current order without being tapped. It deliberately shares none of
+   .metabtn's chrome: next to Select, a second bordered box with a square glyph
+   read as a second checkbox. */
+.seg {
+  flex: 0 0 auto;
+  display: inline-flex;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.segbtn {
+  appearance: none;
+  background: none;
+  border: 0;
+  min-height: 30px;
+  padding: .3rem .6rem;
+  font: 10px/1 var(--mono);
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  cursor: pointer;
+}
+.segbtn + .segbtn { border-left: 1px solid var(--rule); }
+.segbtn:hover { color: var(--ink); }
+.segbtn.on {
+  background: var(--sheet);
+  color: var(--safelight);
+  cursor: default;
+}
+
 /* ── filters: scrolls inside itself, never the page ───────────────────── */
 
 .filters {

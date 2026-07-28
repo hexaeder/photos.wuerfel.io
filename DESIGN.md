@@ -976,8 +976,14 @@ a thousand photos.
 thing allowed to live in `localStorage` alone, since losing a view preference
 costs nothing). Added uses the timestamp in the filename; taken uses the EXIF
 date from `users/<uid>.json`, falling back to upload time for photos that don't
-claim one. The button is hidden entirely when no photo in the album has a
-capture date, rather than offering a control that reorders nothing.
+claim one. The control is hidden entirely when no photo in the album has a
+capture date, rather than offering something that reorders nothing.
+
+It's a two-cell **segment** — both modes on screen, the active one lit in the
+safelight — and not a relabelling button. Sort is a mode rather than an action,
+so the control should state the current order without being tapped; and the
+first version borrowed `.metabtn` from Select, whose `::before` square made it
+read as a second checkbox sitting next to the real one.
 
 Re-sorting reuses the build-once trick: appending an already-attached node
 *moves* it, so reordering the whole grid is one `append` call and every loaded

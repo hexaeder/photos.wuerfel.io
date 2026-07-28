@@ -151,16 +151,20 @@ const saveMyRecord = () =>
 
 /**
  * Offer the sort toggle, and only when it would do something — an album whose
- * photos carry no EXIF dates would get a button that reorders nothing.
+ * photos carry no EXIF dates would get a control that reorders nothing.
+ *
+ * Both modes stay on screen: the segment names what the order *is* without
+ * anyone having to tap it to find out, which a single relabelling button can't.
  */
 function syncSort() {
-  const btn = $('sortBtn');
-  btn.hidden = !recs.some((r) => r.captured);
+  const seg = $('sortSeg');
+  seg.hidden = !recs.some((r) => r.captured);
   const mode = loadSort();
-  btn.textContent = mode === 'taken' ? 'By taken' : 'By added';
-  btn.setAttribute('aria-label', mode === 'taken'
-    ? 'Sorted by when each photo was taken — activate to sort by when it was added'
-    : 'Sorted by when each photo was added — activate to sort by when it was taken');
+  for (const btn of seg.children) {
+    const on = btn.dataset.sort === mode;
+    btn.classList.toggle('on', on);
+    btn.setAttribute('aria-pressed', String(on));
+  }
   gallery.setSort(mode);
 }
 
@@ -250,8 +254,10 @@ function buildGallery() {
     });
 
     $('addBtn').onclick = () => uploader.pick();
-    $('sortBtn').onclick = () => {
-      localStorage.setItem(SORT_KEY, loadSort() === 'taken' ? 'added' : 'taken');
+    $('sortSeg').onclick = (e) => {
+      const mode = e.target.closest('.segbtn')?.dataset.sort;
+      if (!mode || mode === loadSort()) return;
+      localStorage.setItem(SORT_KEY, mode);
       syncSort();
     };
     $('saveAllBtn').onclick = () => saveAll(gallery.pending());
