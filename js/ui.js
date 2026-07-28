@@ -154,3 +154,14 @@ export function shortDate(ms) {
     day: 'numeric', month: 'short', ...(sameYear ? {} : { year: 'numeric' }),
   });
 }
+
+/**
+ * Date plus time of day. Only used for capture times, where the clock is real
+ * information — a trip photo at 06:12 tells you something an upload timestamp
+ * never could, and it's also how you can tell at a glance that the date came
+ * out of EXIF rather than out of the filename.
+ */
+export const shortDateTime = (ms) =>
+  `${shortDate(ms)} ${new Date(ms).toLocaleTimeString(undefined, {
+    hour: '2-digit', minute: '2-digit',
+  })}`;

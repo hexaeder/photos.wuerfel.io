@@ -11,8 +11,8 @@ import { createGallery } from './gallery.js';
 import { createLightbox } from './lightbox.js';
 import { createUploader } from './upload.js';
 import {
-  canShareFiles, fetchFiles, shareBatches, shareFiles,
-  isTouch, downloadUrl, downloadAll, noShareReason,
+  canSaveToGallery, fetchFiles, shareBatches, shareFiles, shareFailure,
+  isHandheld, downloadUrl, downloadAll, noShareReason,
 } from './share.js';
 
 /** Shared state. The lightbox reads me/users through this, so a rename or an
@@ -316,8 +316,8 @@ function renderSelection(picked) {
   for (const id of ['selSave', 'selUnmark', 'selDelete']) {
     $(id).disabled = picked.length === 0;
   }
-  $('selSave').textContent = canShareFiles() ? `Save ${picked.length || ''}`.trim()
-                                             : `Get ${picked.length || ''}`.trim();
+  $('selSave').textContent = canSaveToGallery() ? `Save ${picked.length || ''}`.trim()
+                                                : `Get ${picked.length || ''}`.trim();
   $('selDelete').hidden = album.readonly;
 }
 
@@ -373,7 +373,7 @@ async function saveAll(list) {
 
   const label = (r) => `${frameNo(r.num)} · ${nameOf(ctx.users, r.uid)}`;
 
-  if (!canShareFiles()) return downloadAll_(list, label);
+  if (!canSaveToGallery()) return downloadAll_(list, label);
 
   taskSheet.open({
     title: 'Saving to your photos',
@@ -424,7 +424,9 @@ async function saveAll(list) {
         try {
           await shareFiles(files);        // nothing awaited first: gesture intact
         } catch (e) {
-          if (e.name !== 'AbortError') toast(`Could not save: ${e.message}`, 'bad');
+          // Nothing is marked on a failure or a dismissal — the action button
+          // stays armed with the same batch, so it can simply be tapped again.
+          if (e.name !== 'AbortError') toast(shareFailure(e), 'bad');
           return;
         }
         seen.markSaved(recs);
@@ -479,7 +481,7 @@ async function downloadAll_(list, label) {
              .action('Done', () => taskSheet.close());
   };
 
-  if (!isTouch()) {
+  if (!isHandheld()) {
     taskSheet.summary(noShareReason());
     await downloadAll(items.map((i) => i.url));
     rows.forEach((set) => set('done', 'Saved'));

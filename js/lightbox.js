@@ -1,7 +1,7 @@
-import { $, el, toast, confirmSheet, shortDate } from './ui.js';
+import { $, el, toast, confirmSheet, shortDate, shortDateTime } from './ui.js';
 import { colorFor, nameOf } from './identity.js';
 import { frameNo, downloadName } from './photos.js';
-import { canShareFiles, shareFiles, downloadUrl, isTouch } from './share.js';
+import { canSaveToGallery, shareFiles, shareFailure, downloadUrl, isHandheld } from './share.js';
 
 // Paging is a native scroll-snap carousel rather than a touchend handler.
 //
@@ -43,7 +43,7 @@ export function createLightbox({ backend, album, seen, onDeleted, onChanged, ctx
   let token = 0;         // current slide; token guards a slow fetch landing
                          // after the user has swiped on.
 
-  const CAN_SHARE = canShareFiles();
+  const CAN_SHARE = canSaveToGallery();
   const cur = () => list[idx];
 
   // ── slides ─────────────────────────────────────────────────────────────
@@ -117,9 +117,17 @@ export function createLightbox({ backend, album, seen, onDeleted, onChanged, ctx
     $('lbWho').textContent = nameOf(users, rec.uid);
     $('lbFrame').textContent = frameNo(rec.num);
     $('lbFrame').style.setProperty('--person', colour);
-    // When it was taken is what a person means by "when is this photo from";
-    // the upload time is only a stand-in for photos whose EXIF didn't say.
-    $('lbDate').textContent = shortDate(rec.captured ?? rec.ts);
+    // When it was taken is what a person means by "when is this photo from",
+    // so that's what shows — with the time of day, which both is useful and
+    // makes it visible at a glance that the date came out of EXIF. Photos whose
+    // file didn't say fall back to the upload date, and say so: the word
+    // "added" appearing *is* the signal that there was no capture date.
+    $('lbDate').textContent = rec.captured
+      ? shortDateTime(rec.captured)
+      : `added ${shortDate(rec.ts)}`;
+    $('lbDate').title = rec.captured
+      ? `Taken ${new Date(rec.captured).toLocaleString()}`
+      : `Added ${new Date(rec.ts).toLocaleString()} — the file didn’t say when it was taken`;
 
     $('lbPrev').hidden = idx === 0;
     $('lbNext').hidden = idx === list.length - 1;
@@ -249,7 +257,7 @@ export function createLightbox({ backend, album, seen, onDeleted, onChanged, ctx
       if (!ready) return;
       downloadUrl(ready);                           // synchronous: inside the tap
       markSaved(rec);
-      toast(isTouch() ? 'Saved to Downloads' : 'Downloaded');
+      toast(isHandheld() ? 'Saved to Downloads' : 'Downloaded');
       return;
     }
 
@@ -257,11 +265,15 @@ export function createLightbox({ backend, album, seen, onDeleted, onChanged, ctx
 
     try {
       await shareFiles([ready]);                    // nothing awaited before this
+      // Resolving means the sheet was handed the file, not that the file was
+      // saved — Web Share deliberately never says which target was picked. So
+      // this mark is optimistic, and Unmark is the escape hatch. `ready` stays
+      // set either way, so a failed attempt can just be tapped again.
       markSaved(rec);
       toast('Marked as saved — pick “Save Image” in the sheet');
     } catch (e) {
-      if (e.name === 'AbortError') return;          // sheet dismissed
-      toast(`Could not save: ${e.message}`, 'bad');
+      if (e.name === 'AbortError') return;          // sheet dismissed: no mark
+      toast(shareFailure(e), 'bad');
     }
   };
 

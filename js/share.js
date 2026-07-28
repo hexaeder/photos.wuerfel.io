@@ -4,10 +4,9 @@ import { downloadName } from './photos.js';
 //
 // On Android and iOS that means navigator.share({files}) — the system sheet
 // has a real "Save to Photos" target. Verified on both in Phase 0, including
-// multi-file batches. On desktop there's no such thing, so we fall back to
-// plain downloads.
+// multi-file batches. Everywhere else we fall back to plain downloads.
 //
-// Branch on canShare, never on the user agent.
+// Branch on canSaveToGallery(), never on the user agent.
 
 // How much one share() call is asked to carry.
 //
@@ -49,8 +48,19 @@ export function shareBatches(recs, maxBytes = BATCH_BYTES, maxCount = BATCH_COUN
 
 let _can = null;
 
-/** Can this browser hand files to the OS? */
-export function canShareFiles() {
+/**
+ * A phone or tablet, as opposed to something with a keyboard.
+ *
+ * The *primary* pointer being coarse is the honest question, and it is not
+ * user-agent sniffing — it asks about the input device, which is exactly what
+ * both callers care about. `navigator.maxTouchPoints > 0` was the earlier test
+ * and it's wrong here: a touch-screen Windows laptop answers yes to it while
+ * behaving like a desktop in every way that matters below.
+ */
+export const isHandheld = () => matchMedia('(pointer: coarse)').matches;
+
+/** Can this browser hand files to the OS at all? Not exported: see below. */
+function canShareFiles() {
   if (_can !== null) return _can;
   try {
     const probe = new File([new Uint8Array([0xff, 0xd8, 0xff])], 'probe.jpg',
@@ -61,6 +71,34 @@ export function canShareFiles() {
   }
   return _can;
 }
+
+/**
+ * Can it put files into the OS *photo library* — which is the only reason we
+ * prefer sharing over downloading?
+ *
+ * Desktop Chrome answers yes to `canShareFiles()` and is still the wrong place
+ * to use it. It really does implement `share({ files })`, but the Windows sheet
+ * it opens offers Mail and Teams rather than "save to this folder", so it's the
+ * wrong affordance for a tool whose whole job is getting files onto disk — and
+ * it rejects with `NotAllowedError` often enough to look broken, where a
+ * download never does. Desktop belongs in the download class.
+ *
+ * `canShareFiles` deliberately isn't exported: on its own it's the wrong thing
+ * to branch on, and an export would invite exactly that.
+ */
+export const canSaveToGallery = () => canShareFiles() && isHandheld();
+
+/**
+ * Why a share failed, in words that say what to do about it.
+ *
+ * Web Share rejects with `NotAllowedError` when it can't tie the call to a
+ * fresh user gesture. The bytes are still in hand, so tapping again genuinely
+ * works — which is worth saying, because "permission denied" reads like a
+ * setting the user has to go and change.
+ */
+export const shareFailure = (e) => (e.name === 'NotAllowedError'
+  ? 'The browser wouldn’t open the share sheet. Tap Save again.'
+  : `Could not save: ${e.message}`);
 
 /**
  * Download the originals as Files, in order, three at a time.
@@ -96,17 +134,12 @@ export async function fetchFiles(backend, recs, albumName, onProgress) {
  */
 export const shareFiles = (files) => navigator.share({ files });
 
-/**
- * Phones without Web Share need one download per tap.
- *
- * Desktop browsers happily fire a queue of downloads from a single gesture
- * (Chrome asks once, then allows the rest). Android WebView browsers — which
- * is what DuckDuckGo, and anything else not built on Chrome, actually is —
- * silently drop everything after the first. So on a touch device we step
- * through instead of pretending the queue worked.
- */
-export const isTouch = () =>
-  navigator.maxTouchPoints > 0 || matchMedia('(pointer: coarse)').matches;
+// Phones without Web Share need one download per tap — `isHandheld()` above is
+// the test. Desktop browsers happily fire a queue of downloads from a single
+// gesture (Chrome asks once, then allows the rest), but Android WebView
+// browsers — which is what DuckDuckGo, and anything else not built on Chrome,
+// actually is — silently drop everything after the first. So on a handheld we
+// step through instead of pretending the queue worked.
 
 /** Trigger one download. Synchronous, so it can sit inside a tap handler. */
 export function downloadUrl(url) {
@@ -134,6 +167,6 @@ export async function downloadAll(urls) {
  * `navigator.share`, so it looks supported, but it cannot share files, so it
  * lands here too.
  */
-export const noShareReason = () => isTouch()
+export const noShareReason = () => isHandheld()
   ? 'This browser can’t hand photos to your gallery, so they go to Downloads — look for a “Download” album. Chrome, Brave, Edge and Samsung Internet save straight to Photos. Firefox can’t either.'
   : 'Downloading to this computer.';

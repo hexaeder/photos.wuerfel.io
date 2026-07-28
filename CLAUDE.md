@@ -111,7 +111,12 @@ vendored dependency. `spike/` is the frozen Phase-0 proof-of-concept; don't edit
   that had no flag.
 - **Never `await` before `navigator.share()`.** iOS drops the user gesture and throws
   `NotAllowedError`, so the bytes must be fetched on an *earlier* tap. Branch on
-  `canShareFiles()`, never on the user agent.
+  `canSaveToGallery()`, never on the user agent. That is deliberately stricter than
+  `canShareFiles()`: desktop Chrome can share files but its sheet offers Mail rather than a
+  folder, and it throws `NotAllowedError` intermittently, so desktop belongs in the download
+  class (DESIGN.md §7.5). Also: a resolved `share()` doesn't prove a save — the API never says
+  which target was picked — so marks are optimistic and Unmark is the escape hatch. A rejection
+  must never mark anything.
 - **Originals are never fetched speculatively.** Saving is two taps on share-capable devices
   (fetch, then share), and bulk save fetches one batch immediately before that batch's tap rather
   than the whole selection up front. Don't reintroduce an eager prefetch to save a tap; it

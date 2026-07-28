@@ -1123,6 +1123,21 @@ naive `if (navigator.share)` check passes — but it [cannot share files][ffshar
 Probing with `canShare({ files: [probeFile] })` is what catches it; probing
 `navigator.share` alone would produce a confident failure at the worst moment.
 
+**Capability is necessary but not sufficient: desktop Chrome is the other trap,
+in the opposite direction.** Found on Windows, 2026-07-28. It answers *yes* to
+`canShare({ files })` and really does share — but the Windows sheet it opens
+offers Mail and Teams, not "save into this folder", which is not what anyone at a
+keyboard means by saving a photo. It also rejects with `NotAllowedError`
+intermittently, succeeding on a second attempt, which reads as a broken app.
+
+So the branch is `canSaveToGallery()` — file-sharing capability **and** a coarse
+primary pointer — rather than capability alone. The pointer query is not
+user-agent sniffing: it asks whether this is the kind of device whose share sheet
+has a *Save to Photos* target at all. A touch-screen laptop reports a fine
+primary pointer and correctly lands on downloads, which is the better experience
+there anyway: `downloadUrlFor` is one tap, moves no bytes through JS, and cannot
+fail this way.
+
 Falling through to the download path then breaks twice more:
 
 - `<a download>` is ignored, so the filename comes from the `blob:` URL — hence
@@ -1249,10 +1264,17 @@ save any of them, and made the first save wait on the last download. Per-batch
 fetching is also what makes a video conceivable here at all (§11.2) — the byte
 budget already generalises to one.
 
-Branch on `canShare({ files })` with a real probe file, never on user-agent
-sniffing — and note that `canShare({ files: [] })` is not a reliable probe,
-since some implementations return false for an empty array regardless of
-support.
+Branch on `canSaveToGallery()` (§7.5) — a real probe file through
+`canShare({ files })`, plus a coarse primary pointer — never on user-agent
+sniffing. Note that `canShare({ files: [] })` is not a reliable probe, since some
+implementations return false for an empty array regardless of support.
+
+**A resolved `share()` does not mean the file was saved.** The API deliberately
+never reports which target the user picked, so "saved" is an optimistic mark, and
+the lightbox's Unmark button is the escape hatch. What *is* guaranteed: a
+rejection — `AbortError` on dismissal, `NotAllowedError` on a lost gesture —
+marks nothing and leaves the fetched bytes in hand, so the same button can simply
+be tapped again.
 
 ---
 
@@ -1339,7 +1361,7 @@ js/seen.js          state/<uid>.json, lastSeenAt, downloaded, union merge
 js/gallery.js       tiles, filter, marks, lazy presigning
 js/lightbox.js      thumb → mid viewer, nav, save the original, delete
 js/upload.js        hash → thumb + mid → put, with a progress sheet
-js/share.js         canShare branch, batching, desktop fallback
+js/share.js         canSaveToGallery branch, byte-budget batching, download fallback
 js/ui.js            el / toast / confirm sheet / task sheet
 lib/aws4fetch.js    vendored, MIT
 tools/photoshare.py
