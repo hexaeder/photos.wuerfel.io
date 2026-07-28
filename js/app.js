@@ -190,6 +190,12 @@ function syncIntro() {
   box.hidden = introHidden || recs.length === 0;
   if (box.hidden) return;
   $('introAdd').hidden = album.readonly;
+  // Dropping files works wherever there's something to drag them out of, and
+  // it is otherwise entirely invisible — the legend is the only place it can
+  // be mentioned without adding a control that says so.
+  $('introAddText').textContent = isHandheld()
+    ? 'add photos from this device'
+    : 'add photos — or drop them anywhere on the page';
   const roll = canSaveToGallery();
   $('introHead').textContent = album.readonly
     ? (roll ? 'Straight to your camera roll' : 'Full quality, straight out')

@@ -9,7 +9,7 @@
 
 <!-- data-version: bump by hand on every deploy. index.html is what browsers
      revalidate soonest, so it's the most honest place to stamp it from. -->
-<body data-screen="boot" data-version="v2026-07-28i">
+<body data-screen="boot" data-version="v2026-07-28j">
 
 <!-- ── boot ────────────────────────────────────────────────────────────── -->
 <section class="screen" id="scr-boot">
@@ -98,7 +98,7 @@
     <button class="introx" id="introClose" aria-label="Hide">✕</button>
     <p class="introhead" id="introHead"></p>
     <dl class="introkeys">
-      <div id="introAdd"><dt>+</dt><dd>add photos from this device</dd></div>
+      <div id="introAdd"><dt>+</dt><dd id="introAddText">add photos from this device</dd></div>
       <div><dt>↓ Save</dt><dd>the ones you haven’t saved yet — it keeps track</dd></div>
       <div><dt>Select</dt><dd>pick out specific frames</dd></div>
     </dl>
@@ -106,9 +106,13 @@
 
   <div class="grid" id="grid"></div>
 
+  <!-- The legend above the grid is hidden while the album is empty, which is
+       exactly when someone needs to be told how to fill it — so the drop
+       shortcut is named here too, by pointer type rather than by JS. -->
   <p class="empty" id="galEmpty" hidden>
     <span class="empty-big">Nothing on the sheet yet.</span>
-    Tap <b>+</b> to add the first photos.
+    <span class="touch-only">Tap <b>+</b> to add the first photos.</span>
+    <span class="mouse-only">Press <b>+</b> to add the first photos — or drop them anywhere on the page.</span>
   </p>
 
   <!-- Deploy stamp, reachable only by scrolling past the last frame. -->
@@ -156,6 +160,18 @@
     <p class="upsummary" id="upSummary"></p>
     <div class="uplist" id="upList"></div>
     <button class="btn wide" id="upRetry" hidden>Retry what failed</button>
+  </div>
+</div>
+
+<!-- ── drop target ──────────────────────────────────────────────────────────
+     Shown only while a drag carrying files is over the window. pointer-events
+     stay off: the listeners are on `window`, so the overlay only has to be
+     seen, and letting it swallow events would break the drag underneath it. -->
+<div class="dropzone" id="dropzone" hidden aria-hidden="true">
+  <div class="dropbox">
+    <p class="dropmark">+</p>
+    <p class="drophead">Drop to add</p>
+    <p class="dropsub">Folders welcome · originals kept as they are</p>
   </div>
 </div>
 

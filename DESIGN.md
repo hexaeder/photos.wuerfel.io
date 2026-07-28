@@ -915,6 +915,36 @@ everything downstream of it is not (§11.2).
 
 Do **not** add `capture` — it forces the camera and removes the library option.
 
+**Dropped files are the same door.** On anything with a real pointer, dragging
+files onto the page is the shortcut for `+`, and it ends in the same `run()`:
+dedup, derivatives, the task sheet and the retry button are the ones that were
+already there, so there is no second upload path to keep in step. Four things
+the drop side has to do that the picker gets for free:
+
+- **`preventDefault()` on `dragover`, always** — without it no `drop` event ever
+  fires, *and* the browser leaves the album to display the dropped file.
+- **Filter by hand.** `accept="image/*"` has no drop equivalent. An empty `type`
+  is ordinary (Windows hands over HEIC with no MIME), so the extension is the
+  fallback rather than grounds for refusal, and anything skipped is said out
+  loud in a toast rather than silently dropped.
+- **Walk folders.** Dragging a folder of photos out of a file manager is the
+  obvious gesture, and `dataTransfer.files` answers it with the folder itself —
+  a zero-byte entry that would upload as garbage. `webkitGetAsEntry()` tells the
+  two apart, but it must be called *before* the handler yields, so the entries
+  are collected synchronously and read afterwards. `readEntries` returns at most
+  100 at a time; it has to be called until it comes back empty.
+- **Know when to say no.** Read-only links take the drop only to explain
+  themselves, and a drop landing mid-upload is refused with a toast, because a
+  second `run()` would rewrite the first one's rows out from under it.
+
+The overlay is `pointer-events: none` — the listeners are on `window`, so it
+only has to be seen. It hides on a 900 ms fuse that each `dragover` renews: the
+DnD model re-fires `dragover` every 350 ms even on a stationary pointer, and a
+*cancelled* drag (Escape, a drop on another window) reports nothing at all.
+
+Because the gesture is invisible, it's named in the legend and in the
+empty-album line, on a `(pointer: fine)` test in both places.
+
 Per file:
 
 1. **Hash** the bytes → content id → skip if that key already exists.

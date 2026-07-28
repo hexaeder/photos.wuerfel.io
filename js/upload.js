@@ -1,4 +1,4 @@
-import { $, taskSheet, plural } from './ui.js';
+import { $, taskSheet, toast, plural } from './ui.js';
 import { baseFor, photoKeyFor, thumbKeyFor, midKeyFor } from './photos.js';
 import { capturedAt } from './exif.js';
 
@@ -88,8 +88,69 @@ function limiter(n) {
   });
 }
 
-export function createUploader({ backend, ctx, existing, onUploaded, onDone }) {
+// ── dropped files ────────────────────────────────────────────────────────
+// Everything below is about turning a drop into the same `File[]` the picker
+// hands back. Nothing downstream of run() knows which one it came from.
+
+const IMAGE_EXT = /\.(jpe?g|png|webp|heic|heif|gif|avif|tiff?|bmp)$/i;
+
+/** `accept="image/*"` has no equivalent for a drop, so the filter is by hand.
+    An empty `type` is ordinary — Windows hands over HEIC with no MIME at all —
+    so the extension is the fallback rather than a reason to refuse. */
+const looksLikeImage = (f) =>
+  f.type ? f.type.startsWith('image/') : IMAGE_EXT.test(f.name);
+
+/** One `readEntries` call. It returns at most 100 entries, so callers loop. */
+const readBatch = (reader) =>
+  new Promise((resolve) => reader.readEntries(resolve, () => resolve([])));
+
+async function walk(entry, out, depth = 0) {
+  // Dotfiles are skipped before the image filter sees them: a folder off a Mac
+  // carries a .DS_Store, and "1 file skipped" is a worse answer than silence
+  // for something the user never meant to drag.
+  if (entry.name.startsWith('.')) return;
+  if (entry.isFile) {
+    // A file that can't be read (permissions, a vanished mount) is skipped
+    // rather than failing the whole drop.
+    const file = await new Promise((res) => entry.file(res, () => res(null)));
+    if (file) out.push(file);
+    return;
+  }
+  if (!entry.isDirectory || depth > 6) return;
+  const reader = entry.createReader();
+  for (;;) {
+    const batch = await readBatch(reader);
+    if (!batch.length) return;
+    for (const child of batch) await walk(child, out, depth + 1);
+  }
+}
+
+/**
+ * The files in a drop, folders walked through.
+ *
+ * Dragging a folder of photos out of a file manager is the obvious gesture and
+ * `dataTransfer.files` answers it with the folder itself — a zero-byte entry
+ * that would upload as garbage. `webkitGetAsEntry()` sees the difference, but
+ * only if it's called before this handler yields, so the entries are collected
+ * synchronously here and read afterwards. Browsers without it (or a drop that
+ * carries no entries at all) fall back to the plain file list.
+ */
+async function filesFromDrop(dt) {
+  const flat = [...dt.files];
+  const entries = [...(dt.items ?? [])]
+    .filter((i) => i.kind === 'file')
+    .map((i) => i.webkitGetAsEntry?.())
+    .filter(Boolean);
+  if (entries.length !== flat.length) return flat;
+
+  const out = [];
+  for (const e of entries) await walk(e, out);
+  return out;
+}
+
+export function createUploader({ backend, album, ctx, existing, onUploaded, onDone }) {
   const picker = $('filePicker');
+  let busy = false;
 
   picker.addEventListener('change', () => {
     const files = [...picker.files];
@@ -98,6 +159,15 @@ export function createUploader({ backend, ctx, existing, onUploaded, onDone }) {
   });
 
   async function run(files) {
+    busy = true;
+    try {
+      await upload(files);
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function upload(files) {
     const limit = limiter(PARALLEL_PUTS);
     const failed = [];
     let added = 0;
@@ -215,6 +285,75 @@ export function createUploader({ backend, ctx, existing, onUploaded, onDone }) {
       taskSheet.action('Done', () => taskSheet.close());
     }
   }
+
+  // ── drag and drop ──────────────────────────────────────────────────────
+  // A shortcut for + on anything with a pointer, and nothing more: a drop is
+  // handed to the same run(), so dedup, derivatives, the task sheet and the
+  // retry button are the ones that were already there.
+
+  const zone = $('dropzone');
+  let hideTimer = 0;
+
+  const hideZone = () => {
+    clearTimeout(hideTimer);
+    zone.hidden = true;
+  };
+  const hideIn = (ms) => {
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(hideZone, ms);
+  };
+  const showZone = () => {
+    zone.hidden = false;
+    // The drag-and-drop model re-fires dragover on the current target every
+    // 350ms even while the pointer sits still, so a lapsed timer means the
+    // drag is genuinely gone. It's the only way to hear about a *cancelled*
+    // drag — Escape and a drop on another window both arrive as silence.
+    hideIn(900);
+  };
+
+  // Array.from, not a spread: `types` is a plain array now, but the older
+  // DOMStringList is merely array-like and would throw on one.
+  const hasFiles = (e) => Array.from(e.dataTransfer?.types ?? []).includes('Files');
+  const onGallery = () => document.body.dataset.screen === 'gallery';
+
+  addEventListener('dragover', (e) => {
+    if (!hasFiles(e)) return;
+    // Two jobs: without it the drop event never fires, and the browser leaves
+    // the album to display the dropped file instead.
+    e.preventDefault();
+    e.dataTransfer.dropEffect = onGallery() ? 'copy' : 'none';
+    // A read-only album still takes the drop — to explain itself — but the
+    // overlay would be promising something it can't do.
+    if (onGallery() && !album.readonly) showZone();
+  });
+
+  // relatedTarget is null when the pointer left the window — but Safari also
+  // nulls it crossing between elements *inside* the page, where the next
+  // dragover is ~immediate. Hiding on a short fuse instead of at once lets
+  // that dragover cancel it, so the overlay doesn't strobe over the grid.
+  addEventListener('dragleave', (e) => { if (!e.relatedTarget) hideIn(80); });
+
+  addEventListener('drop', async (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    hideZone();
+    if (!onGallery()) return;
+    if (album.readonly) {
+      return toast('This link can look at the album, but not add to it.', 'bad');
+    }
+    // A second run() would rewrite the first one's rows out from under it.
+    if (busy) return toast('Still adding the last batch — drop these when it’s done.');
+    if (!$('upSheet').hidden) taskSheet.close();
+
+    const found = await filesFromDrop(e.dataTransfer);
+    const files = found.filter(looksLikeImage);
+    if (!files.length) {
+      return toast(found.length ? 'Those aren’t images.' : 'Nothing to add.', 'bad');
+    }
+    const skipped = found.length - files.length;
+    if (skipped) toast(`${plural(skipped, 'file')} skipped — photos only.`);
+    run(files);
+  });
 
   return {
     pick: () => picker.click(),

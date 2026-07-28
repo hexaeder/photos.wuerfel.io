@@ -72,7 +72,8 @@ must remove all three keys.
 Module map: `app.js` (boot, screen routing, bulk save, error text) → `album.js` (link decode),
 `backend-s3.js` (the only place that speaks S3), `photos.js` (filename → record),
 `identity.js` (uid/name/colour/`users/`), `exif.js` (`DateTimeOriginal`, nothing else),
-`seen.js`, `gallery.js`, `lightbox.js`, `upload.js`, `share.js`,
+`seen.js`, `gallery.js`, `lightbox.js`, `upload.js` (the picker *and* dropped
+files, both ending in one `run()` — DESIGN.md §7.1), `share.js`,
 `ui.js` (`el`/`toast`/`confirmSheet`/`taskSheet`). `lib/aws4fetch.js` is the single
 vendored dependency. `spike/` is the frozen Phase-0 proof-of-concept; don't edit it.
 
